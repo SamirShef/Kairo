@@ -33,20 +33,56 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup vcpkg
-      uses: microsoft/setup-vcpkg@v1
-      with:
-        vcpkg-directory: 'C:\vcpkg'
+    - name: Install LLVM with winget
+      run: |
+        # Устанавливаем LLVM с помощью winget
+        winget install -e --id LLVM.LLVM --version 17.0.6
 
-    - name: Install LLVM
-      run: vcpkg install llvm --triplet x64-windows
+    - name: Find LLVM installation path
+      run: |
+        # Ищем путь установки LLVM
+        $llvmPath = (Get-ItemProperty -Path "HKLM:\SOFTWARE\LLVM\LLVM" -ErrorAction SilentlyContinue).'(default)'
+        if (-not $llvmPath) {
+          $llvmPath = "C:\Program Files\LLVM"
+        }
+        echo "LLVM_PATH=$llvmPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "LLVM_DIR=$llvmPath\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+    - name: Verify LLVM installation
+      run: |
+        Write-Host "LLVM installation verification:"
+        Write-Host "LLVM_PATH: $env:LLVM_PATH"
+        Write-Host "LLVM_DIR: $env:LLVM_DIR"
+        
+        # Проверяем существование ключевых файлов
+        if (Test-Path "$env:LLVM_DIR") {
+          Write-Host "LLVM CMake directory exists"
+          Get-ChildItem "$env:LLVM_DIR" | ForEach-Object { Write-Host "  - $($_.Name)" }
+        } else {
+          Write-Host "LLVM CMake directory does not exist"
+          # Попробуем найти CMake файлы в других местах
+          $foundCmake = Get-ChildItem -Path "$env:LLVM_PATH" -Recurse -Filter "*config.cmake" | Select-Object -First 1
+          if ($foundCmake) {
+            $newLlvmDir = $foundCmake.Directory.FullName
+            Write-Host "Found LLVM CMake files at: $newLlvmDir"
+            echo "LLVM_DIR=$newLlvmDir" | Out-File -FilePath $env:GITHUB_ENV -Append
+          }
+        }
+
+    - name: Add LLVM to PATH
+      run: echo "$env:LLVM_PATH\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
     - name: Create Build Directory
       run: mkdir build
 
-    - name: Configure CMake with vcpkg
+    - name: Configure CMake with explicit paths
       run: |
-        cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        # Явно указываем пути к LLVM
+        cmake -B build `
+          -DCMAKE_BUILD_TYPE=Release `
+          -G "Visual Studio 17 2022" `
+          -DLLVM_DIR="$env:LLVM_DIR" `
+          -DCMAKE_PREFIX_PATH="$env:LLVM_PATH"
 
     - name: Build
       run: cmake --build build --config Release
