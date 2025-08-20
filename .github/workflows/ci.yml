@@ -31,17 +31,31 @@ jobs:
       - name: Show clang version
         run: clang --version
 
-      - name: Configure (CMake + Ninja)
-        shell: bash
-        run: |
-          LLVM_DIR_PATH="$(llvm-config --cmakedir)"
-          PREFIX_PATH="$(dirname "$(dirname "$LLVM_DIR_PATH")")"
-          echo "LLVM_DIR_PATH=$LLVM_DIR_PATH"
-          echo "CMAKE_PREFIX_PATH=$PREFIX_PATH"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR_PATH" -DCMAKE_PREFIX_PATH="$PREFIX_PATH"
+      - name: Configure (CMake + Ninja) [Windows]
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
         env:
           CC: clang
           CXX: clang++
+        run: |
+          $llvmDir = Join-Path $env:RUNNER_TEMP 'llvm'
+          $llvmCMake = Join-Path $llvmDir 'lib\cmake\llvm'
+          echo "LLVM_DIR=$llvmCMake"
+          echo "CMAKE_PREFIX_PATH=$llvmDir"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmCMake" -DCMAKE_PREFIX_PATH="$llvmDir"
+
+      - name: Configure (CMake + Ninja) [Unix]
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          LLVM_DIR_PATH="${{ runner.temp }}/llvm/lib/cmake/llvm"
+          PREFIX_PATH="${{ runner.temp }}/llvm"
+          echo "LLVM_DIR_PATH=$LLVM_DIR_PATH"
+          echo "CMAKE_PREFIX_PATH=$PREFIX_PATH"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR_PATH" -DCMAKE_PREFIX_PATH="$PREFIX_PATH"
 
       - name: Build
         run: cmake --build build --config Release -- -v
