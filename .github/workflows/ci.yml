@@ -34,13 +34,10 @@ jobs:
       - name: Configure (CMake + Ninja)
         shell: bash
         run: |
-          if [[ "${{ matrix.os }}" == windows-latest ]]; then
-            LLVM_DIR_PATH="${{ runner.temp }}\\llvm\\lib\\cmake\\llvm"
-            PREFIX_PATH="${{ runner.temp }}\\llvm"
-          else
-            LLVM_DIR_PATH="${{ runner.temp }}/llvm/lib/cmake/llvm"
-            PREFIX_PATH="${{ runner.temp }}/llvm"
-          fi
+          LLVM_DIR_PATH="$(llvm-config --cmakedir)"
+          PREFIX_PATH="$(dirname "$(dirname "$LLVM_DIR_PATH")")"
+          echo "LLVM_DIR_PATH=$LLVM_DIR_PATH"
+          echo "CMAKE_PREFIX_PATH=$PREFIX_PATH"
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR_PATH" -DCMAKE_PREFIX_PATH="$PREFIX_PATH"
         env:
           CC: clang
