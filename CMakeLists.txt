@@ -6,16 +6,18 @@ message(STATUS "Found LLVM ${LLVM_VERSION}")
 message(STATUS "LLVM includes: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "LLVM libraries: ${LLVM_LIBRARY_DIRS}")
 
-include_directories(${LLVM_INCLUDE_DIRS})
-link_directories(${LLVM_LIBRARY_DIRS})
-
-add_definitions(${LLVM_DEFINITIONS})
-
 file(GLOB_RECURSE SOURCES "src/*.cpp")
 
 add_executable(stc ${SOURCES})
 
-target_link_libraries(stc
-    libLLVM-${LLVM_VERSION_MAJOR}.so
-    rt dl m z zstd
-)
+# Use LLVM's CMake integration for cross-platform linking
+# Prefer the monolithic target if available, otherwise map components.
+target_include_directories(stc PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_definitions(stc PRIVATE ${LLVM_DEFINITIONS})
+
+if (TARGET LLVM)
+    target_link_libraries(stc PRIVATE LLVM)
+else()
+    llvm_map_components_to_libnames(LLVM_LIBS all)
+    target_link_libraries(stc PRIVATE ${LLVM_LIBS})
+endif()

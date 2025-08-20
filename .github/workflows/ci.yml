@@ -38,11 +38,22 @@ jobs:
           CC: clang
           CXX: clang++
         run: |
-          $llvmDir = Join-Path $env:RUNNER_TEMP 'llvm'
+          # Prefer action-provided LLVM_PATH; fallback to runner.temp
+          $llvmDir = if ($env:LLVM_PATH) { $env:LLVM_PATH } else { Join-Path $env:RUNNER_TEMP 'llvm' }
           $llvmCMake = Join-Path $llvmDir 'lib\cmake\llvm'
-          echo "LLVM_DIR=$llvmCMake"
-          echo "CMAKE_PREFIX_PATH=$llvmDir"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmCMake" -DCMAKE_PREFIX_PATH="$llvmDir"
+          $llvmDirNorm = $llvmDir -replace '\\','/'
+          $llvmCMakeNorm = $llvmCMake -replace '\\','/'
+          Write-Host "LLVM_DIR=$llvmCMakeNorm"
+          Write-Host "CMAKE_PREFIX_PATH=$llvmDirNorm"
+          if (-Not (Test-Path -Path $llvmCMake)) {
+            Write-Host "Contents of LLVM lib/cmake directory:";
+            Get-ChildItem -Recurse (Join-Path $llvmDir 'lib') -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { $_.FullName }
+            throw "LLVM CMake package directory not found: $llvmCMake"
+          }
+          if (-Not (Test-Path (Join-Path $llvmCMake 'LLVMConfig.cmake'))) {
+            throw "LLVMConfig.cmake not found in $llvmCMake"
+          }
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmCMakeNorm" -DCMAKE_PREFIX_PATH="$llvmDirNorm"
 
       - name: Configure (CMake + Ninja) [Unix]
         if: matrix.os != 'windows-latest'
