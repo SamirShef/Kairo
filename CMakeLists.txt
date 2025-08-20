@@ -16,6 +16,6 @@ file(GLOB_RECURSE SOURCES "src/*.cpp")
 add_executable(stc ${SOURCES})
 
 target_link_libraries(stc
-    libLLVM-${LLVM_VERSION_MAJOR}.so  # Например, libLLVM-20.so
+    libLLVM-${LLVM_VERSION_MAJOR}.so
     rt dl m z zstd
 )

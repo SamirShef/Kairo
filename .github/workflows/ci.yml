@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
-    tags:
-      - '*'
+#    tags:
+#      - '*'
   workflow_dispatch:
 
 jobs:
@@ -32,13 +32,46 @@ jobs:
         run: clang --version
 
       - name: Configure (CMake + Ninja)
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="${{ runner.temp }}/llvm/lib/cmake/llvm"
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == windows-latest ]]; then
+            LLVM_DIR_PATH="${{ runner.temp }}\\llvm\\lib\\cmake\\llvm"
+            PREFIX_PATH="${{ runner.temp }}\\llvm"
+          else
+            LLVM_DIR_PATH="${{ runner.temp }}/llvm/lib/cmake/llvm"
+            PREFIX_PATH="${{ runner.temp }}/llvm"
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR_PATH" -DCMAKE_PREFIX_PATH="$PREFIX_PATH"
         env:
           CC: clang
           CXX: clang++
 
       - name: Build
         run: cmake --build build --config Release -- -v
+
+      - name: Bundle LLVM runtime (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build\bundle | Out-Null
+          $src = Join-Path $env:RUNNER_TEMP 'llvm\bin'
+          Get-ChildItem $src -Filter '*.dll' | Where-Object { $_.Name -match 'LLVM|clang' } | Copy-Item -Destination build\bundle -Force
+
+      - name: Bundle LLVM runtime (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          mkdir -p build/bundle
+          cp -f ${{ runner.temp }}/llvm/lib/libLLVM*.dylib build/bundle 2>/dev/null || true
+          cp -f ${{ runner.temp }}/llvm/lib/libclang*.dylib build/bundle 2>/dev/null || true
+
+      - name: Bundle LLVM runtime (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          mkdir -p build/bundle
+          cp -f ${{ runner.temp }}/llvm/lib/libLLVM*.so build/bundle 2>/dev/null || true
+          cp -f ${{ runner.temp }}/llvm/lib/libclang*.so* build/bundle 2>/dev/null || true
 
       - name: Upload stc artifact
         if: always()
@@ -49,3 +82,4 @@ jobs:
             build/stc*
             build/Release/stc.exe
             build/**/stc*
+            build/bundle/**
