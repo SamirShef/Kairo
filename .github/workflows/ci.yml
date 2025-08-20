@@ -17,7 +17,7 @@ jobs:
         wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
         echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" | sudo tee /etc/apt/sources.list.d/llvm.list
         sudo apt-get update
-        sudo apt-get install -y llvm-17-dev
+        sudo apt-get install -y llvm-17-dev clang-17
 
     - name: Create Build Directory
       run: mkdir -p build
@@ -33,16 +33,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Download LLVM 17
-      run: |
-        Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/LLVM-17.0.6-win64.zip" -OutFile "llvm.zip"
-        Expand-Archive -Path "llvm.zip" -DestinationPath "C:/LLVM"
+    - name: Install LLVM with Chocolatey
+      run: choco install llvm --version=17.0.6 -y
 
     - name: Add LLVM to PATH
-      run: echo "C:\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      run: |
+        $llvmPath = "C:\Program Files\LLVM\bin"
+        echo "$llvmPath" | Out-File -FilePath $env:GITHUB_PATH -Append
 
     - name: Set LLVM_DIR
-      run: echo "LLVM_DIR=C:\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
+      run: |
+        $llvmDir = "C:\Program Files\LLVM\lib\cmake\llvm"
+        echo "LLVM_DIR=$llvmDir" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Create Build Directory
       run: mkdir build
