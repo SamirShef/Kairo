@@ -33,24 +33,50 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install Chocolatey package
+    - name: Find installed LLVM
       run: |
-        choco install llvm --version=17.0.6 -y --package-parameters="'/installpath:C:\LLVM'"
+        # Ищем установленную версию LLVM
+        $llvmPath = "C:\Program Files\LLVM"
+        if (Test-Path $llvmPath) {
+            Write-Host "Found LLVM installation at: $llvmPath"
+            # Ищем путь к CMake файлам
+            $cmakePath = Get-ChildItem -Path $llvmPath -Recurse -Filter "*Config.cmake" | Select-Object -First 1 | ForEach-Object { $_.Directory.FullName }
+            if ($cmakePath) {
+                Write-Host "Found LLVM CMake files at: $cmakePath"
+                echo "LLVM_DIR=$cmakePath" | Out-File -FilePath $env:GITHUB_ENV -Append
+            } else {
+                # Пробуем стандартный путь
+                $standardPath = "$llvmPath\lib\cmake\llvm"
+                if (Test-Path $standardPath) {
+                    echo "LLVM_DIR=$standardPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+                } else {
+                    Write-Host "Could not find LLVM CMake files"
+                }
+            }
+            echo "LLVM_PATH=$llvmPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+            Write-Host "LLVM not found at standard location"
+        }
 
-    - name: Set environment variables
+    - name: Add LLVM to PATH
       run: |
-        echo "LLVM_DIR=C:\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "C:\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        if ($env:LLVM_PATH) {
+            echo "$env:LLVM_PATH\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        } else {
+            echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        }
 
     - name: Create Build Directory
       run: mkdir build
 
     - name: Configure CMake
       run: |
-        cmake -B build `
-          -DCMAKE_BUILD_TYPE=Release `
-          -G "Visual Studio 17 2022" `
-          -DLLVM_DIR="$env:LLVM_DIR"
+        if ($env:LLVM_DIR) {
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -DLLVM_DIR="$env:LLVM_DIR"
+        } else {
+            # Пробуем без явного указания LLVM_DIR
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022"
+        }
 
     - name: Build
       run: cmake --build build --config Release
