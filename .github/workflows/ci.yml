@@ -40,19 +40,23 @@ jobs:
         run: |
           # Prefer action-provided LLVM_PATH; fallback to runner.temp
           $llvmDir = if ($env:LLVM_PATH) { $env:LLVM_PATH } else { Join-Path $env:RUNNER_TEMP 'llvm' }
-          $llvmCMake = Join-Path $llvmDir 'lib\cmake\llvm'
+          # Try standard path first
+          $candidate = Join-Path $llvmDir 'lib\cmake\llvm'
+          if (-Not (Test-Path (Join-Path $candidate 'LLVMConfig.cmake'))) {
+            # Fallback: search recursively for LLVMConfig.cmake
+            $found = Get-ChildItem -Path $llvmDir -Recurse -Filter 'LLVMConfig.cmake' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($null -ne $found) {
+              $candidate = Split-Path -Parent $found.FullName
+            } else {
+              Write-Host "Could not locate LLVMConfig.cmake under $llvmDir"
+              Get-ChildItem -Path $llvmDir -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 100 | ForEach-Object { $_.FullName }
+              throw "LLVMConfig.cmake not found"
+            }
+          }
           $llvmDirNorm = $llvmDir -replace '\\','/'
-          $llvmCMakeNorm = $llvmCMake -replace '\\','/'
+          $llvmCMakeNorm = $candidate -replace '\\','/'
           Write-Host "LLVM_DIR=$llvmCMakeNorm"
           Write-Host "CMAKE_PREFIX_PATH=$llvmDirNorm"
-          if (-Not (Test-Path -Path $llvmCMake)) {
-            Write-Host "Contents of LLVM lib/cmake directory:";
-            Get-ChildItem -Recurse (Join-Path $llvmDir 'lib') -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { $_.FullName }
-            throw "LLVM CMake package directory not found: $llvmCMake"
-          }
-          if (-Not (Test-Path (Join-Path $llvmCMake 'LLVMConfig.cmake'))) {
-            throw "LLVMConfig.cmake not found in $llvmCMake"
-          }
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmCMakeNorm" -DCMAKE_PREFIX_PATH="$llvmDirNorm"
 
       - name: Configure (CMake + Ninja) [Unix]
