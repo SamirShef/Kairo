@@ -29,28 +29,28 @@ jobs:
       run: cmake --build build --config Release
 
   build-windows:
-  runs-on: windows-latest
-  steps:
-  - uses: actions/checkout@v4
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
 
-  - name: Download and Install LLVM
-    run: |
-      Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/LLVM-17.0.6-win64.exe" -OutFile "llvm-installer.exe"
-      
-      # Устанавливаем LLVM в тихом режиме
-      Start-Process -Wait -FilePath ".\llvm-installer.exe" -ArgumentList "/S", "/D=C:\LLVM"
+    - name: Download and Install LLVM
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/LLVM-17.0.6-win64.exe" -OutFile "llvm-installer.exe"
+        
+        # Устанавливаем LLVM в тихом режиме
+        Start-Process -Wait -FilePath ".\llvm-installer.exe" -ArgumentList "/S", "/D=C:\LLVM"
 
-  - name: Add LLVM to PATH
-    run: echo "C:\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+    - name: Add LLVM to PATH
+      run: echo "C:\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-  - name: Set LLVM_DIR
-    run: echo "LLVM_DIR=C:\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
+    - name: Set LLVM_DIR
+      run: echo "LLVM_DIR=C:\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-  - name: Create Build Directory
-    run: mkdir build
+    - name: Create Build Directory
+      run: mkdir build
 
-  - name: Configure CMake
-    run: cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022"
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022"
 
-  - name: Build
-    run: cmake --build build --config Release
+    - name: Build
+      run: cmake --build build --config Release
