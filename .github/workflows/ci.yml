@@ -33,51 +33,20 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Download and Install LLVM
+    - name: Setup vcpkg
       run: |
-        # Скачиваем установщик
-        $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/LLVM-17.0.6-win64.exe"
-        Invoke-WebRequest -Uri $url -OutFile "llvm-installer.exe"
-        
-        # Устанавливаем LLVM в тихом режиме
-        Start-Process -Wait -FilePath ".\llvm-installer.exe" -ArgumentList "/S", "/D=C:\LLVM"
+        git clone https://github.com/microsoft/vcpkg.git
+        .\vcpkg\bootstrap-vcpkg.bat
 
-    - name: Check LLVM installation structure
-      run: |
-        Write-Host "Checking LLVM installation structure..."
-        Get-ChildItem -Path "C:\LLVM" -Recurse -Filter "*config.cmake" | ForEach-Object { Write-Host "Found: $($_.FullName)" }
-        if (Test-Path "C:\LLVM\lib\cmake\llvm") {
-            Write-Host "LLVM CMake path exists: C:\LLVM\lib\cmake\llvm"
-            Get-ChildItem -Path "C:\LLVM\lib\cmake\llvm" | ForEach-Object { Write-Host "  - $($_.Name)" }
-        } else {
-            Write-Host "LLVM CMake path does not exist at C:\LLVM\lib\cmake\llvm"
-            # Поиск альтернативных путей
-            Get-ChildItem -Path "C:\LLVM" -Recurse -Filter "*cmake*" -Directory | ForEach-Object { Write-Host "Alternative cmake path: $($_.FullName)" }
-        }
-
-    - name: Set correct LLVM path
-      run: |
-        # Ищем правильный путь к CMake файлам LLVM
-        $llvmCmakePath = Get-ChildItem -Path "C:\LLVM" -Recurse -Filter "*config.cmake" | Select-Object -First 1 | ForEach-Object { $_.Directory.FullName }
-        if ($llvmCmakePath) {
-            Write-Host "Found LLVM CMake files at: $llvmCmakePath"
-            echo "LLVM_DIR=$llvmCmakePath" | Out-File -FilePath $env:GITHUB_ENV -Append
-        } else {
-            # Fallback к стандартному пути
-            echo "LLVM_DIR=C:\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
-        }
-
-    - name: Add LLVM to PATH
-      run: echo "C:\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+    - name: Install LLVM with vcpkg
+      run: .\vcpkg\vcpkg install llvm
 
     - name: Create Build Directory
       run: mkdir build
 
-    - name: Configure CMake
+    - name: Configure CMake with vcpkg toolchain
       run: |
-        # Добавляем вывод отладочной информации
-        echo "LLVM_DIR is set to: $env:LLVM_DIR"
-        cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -DCMAKE_PREFIX_PATH="C:\LLVM" -DLLVM_DIR="$env:LLVM_DIR"
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022" -DCMAKE_TOOLCHAIN_FILE="vcpkg/scripts/buildsystems/vcpkg.cmake"
 
     - name: Build
       run: cmake --build build --config Release
