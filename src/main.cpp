@@ -15,6 +15,7 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Config/llvm-config.h"
 
 #include <array>
 #include <cstdio>
@@ -160,7 +161,9 @@ int main(int argc, char** argv)
     }
 
     llvm::legacy::PassManager pass;
-    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, llvm::CodeGenFileType::ObjectFile))
+    // Универсальный вызов для большинства версий LLVM: 4 аргумента (с nullptr для asm-стрима)
+    auto fileType = static_cast<llvm::CodeGenFileType>(1); // 1 = Object file
+    if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType))
     {
         std::cerr << "TargetMachine can't emit a file of this type" << std::endl;
         return 1;
