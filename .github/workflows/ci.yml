@@ -32,7 +32,7 @@ jobs:
         run: clang --version
 
       - name: Configure (CMake + Ninja)
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="${{ runner.temp }}/llvm/lib/cmake/llvm"
         env:
           CC: clang
           CXX: clang++

@@ -1,5 +1,4 @@
 #include "../../include/lexer/lexer.hpp"
-#include <asm-generic/errno.h>
 #include <cctype>
 #include <stdexcept>
 #include <vector>

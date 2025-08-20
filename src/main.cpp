@@ -15,7 +15,6 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Config/llvm-config.h"
 
 #include <array>
 #include <cstdio>
