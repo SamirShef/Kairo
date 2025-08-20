@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        llvm: [17]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup LLVM ${{ matrix.llvm }}
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: ${{ matrix.llvm }}
+          directory: ${{ runner.temp }}/llvm
+
+      - name: Add LLVM to PATH
+        shell: bash
+        run: echo "${{ runner.temp }}/llvm/bin" >> $GITHUB_PATH
+
+      - name: Show clang version
+        run: clang --version
+
+      - name: Configure (CMake + Ninja)
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        env:
+          CC: clang
+          CXX: clang++
+
+      - name: Build
+        run: cmake --build build --config Release -- -v
+
+      - name: Upload stc artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stc-${{ matrix.os }}
+          path: |
+            build/stc*
+            build/Release/stc.exe
+            build/**/stc*
