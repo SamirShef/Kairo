@@ -7,101 +7,48 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        llvm: [17]
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
-      - name: Setup LLVM ${{ matrix.llvm }}
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: ${{ matrix.llvm }}
-          directory: ${{ runner.temp }}/llvm
+    - name: Install LLVM 17
+      run: |
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+        sudo apt-get update
+        sudo apt-get install -y llvm-17-dev
 
-      - name: Add LLVM to PATH
-        shell: bash
-        run: echo "${{ runner.temp }}/llvm/bin" >> $GITHUB_PATH
+    - name: Create Build Directory
+      run: mkdir -p build
 
-      - name: Show clang version
-        run: clang --version
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Configure (CMake + Ninja) [Windows]
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        env:
-          CC: clang
-          CXX: clang++
-        run: |
-          # Prefer action-provided LLVM_PATH; fallback to runner.temp
-          $llvmDir = if ($env:LLVM_PATH) { $env:LLVM_PATH } else { Join-Path $env:RUNNER_TEMP 'llvm' }
-          $llvmCMake = Join-Path $llvmDir 'lib\cmake\llvm'
-          $llvmDirNorm = $llvmDir -replace '\\','/'
-          $llvmCMakeNorm = $llvmCMake -replace '\\','/'
-          Write-Host "LLVM_DIR=$llvmCMakeNorm"
-          Write-Host "CMAKE_PREFIX_PATH=$llvmDirNorm"
-          if (-Not (Test-Path -Path $llvmCMake)) {
-            Write-Host "Contents of LLVM lib/cmake directory:";
-            Get-ChildItem -Recurse (Join-Path $llvmDir 'lib') -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { $_.FullName }
-            throw "LLVM CMake package directory not found: $llvmCMake"
-          }
-          if (-Not (Test-Path (Join-Path $llvmCMake 'LLVMConfig.cmake'))) {
-            throw "LLVMConfig.cmake not found in $llvmCMake"
-          }
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$llvmCMakeNorm" -DCMAKE_PREFIX_PATH="$llvmDirNorm"
+    - name: Build
+      run: cmake --build build --config Release
 
-      - name: Configure (CMake + Ninja) [Unix]
-        if: matrix.os != 'windows-latest'
-        shell: bash
-        env:
-          CC: clang
-          CXX: clang++
-        run: |
-          LLVM_DIR_PATH="${{ runner.temp }}/llvm/lib/cmake/llvm"
-          PREFIX_PATH="${{ runner.temp }}/llvm"
-          echo "LLVM_DIR_PATH=$LLVM_DIR_PATH"
-          echo "CMAKE_PREFIX_PATH=$PREFIX_PATH"
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="$LLVM_DIR_PATH" -DCMAKE_PREFIX_PATH="$PREFIX_PATH"
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
 
-      - name: Build
-        run: cmake --build build --config Release -- -v
+    - name: Download LLVM 17
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.6/LLVM-17.0.6-win64.zip" -OutFile "llvm.zip"
+        Expand-Archive -Path "llvm.zip" -DestinationPath "C:/LLVM"
 
-      - name: Bundle LLVM runtime (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path build\bundle | Out-Null
-          $src = Join-Path $env:RUNNER_TEMP 'llvm\bin'
-          Get-ChildItem $src -Filter '*.dll' | Where-Object { $_.Name -match 'LLVM|clang' } | Copy-Item -Destination build\bundle -Force
+    - name: Add LLVM to PATH
+      run: echo "C:\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      - name: Bundle LLVM runtime (macOS)
-        if: matrix.os == 'macos-latest'
-        shell: bash
-        run: |
-          mkdir -p build/bundle
-          cp -f ${{ runner.temp }}/llvm/lib/libLLVM*.dylib build/bundle 2>/dev/null || true
-          cp -f ${{ runner.temp }}/llvm/lib/libclang*.dylib build/bundle 2>/dev/null || true
+    - name: Set LLVM_DIR
+      run: echo "LLVM_DIR=C:\LLVM\lib\cmake\llvm" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Bundle LLVM runtime (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        shell: bash
-        run: |
-          mkdir -p build/bundle
-          cp -f ${{ runner.temp }}/llvm/lib/libLLVM*.so build/bundle 2>/dev/null || true
-          cp -f ${{ runner.temp }}/llvm/lib/libclang*.so* build/bundle 2>/dev/null || true
+    - name: Create Build Directory
+      run: mkdir build
 
-      - name: Upload stc artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: stc-${{ matrix.os }}
-          path: |
-            build/stc*
-            build/Release/stc.exe
-            build/**/stc*
-            build/bundle/**
+    - name: Configure CMake
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -G "Visual Studio 17 2022"
+
+    - name: Build
+      run: cmake --build build --config Release
