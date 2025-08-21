@@ -33,17 +33,19 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup vcpkg
-      uses: microsoft/vcpkg-action@v1
-      with:
-        # Use builtin cache for binary artifacts
-        cacheHitVar: VCPKG_CACHE_HIT
+    - name: Install vcpkg
+      shell: pwsh
+      run: |
+        $vcpkgRoot = "$env:USERPROFILE\vcpkg"
+        git clone https://github.com/microsoft/vcpkg "$vcpkgRoot"
+        & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+        echo "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Install LLVM via vcpkg (x64-windows)
       shell: pwsh
       run: |
-        vcpkg version
-        vcpkg install llvm:x64-windows
+        & "$env:VCPKG_ROOT\vcpkg.exe" version
+        & "$env:VCPKG_ROOT\vcpkg.exe" install llvm:x64-windows
 
     - name: Create Build Directory
       run: cmake -E make_directory build
