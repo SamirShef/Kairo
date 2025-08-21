@@ -40,6 +40,5 @@ private:
 
     bool canImplicitlyCast(TypeValue, TypeValue);
 
-    // Проверка на константное выражение для глобальных инициализаторов
     bool isConstExpr(const AST::Expr&) const;
 };
