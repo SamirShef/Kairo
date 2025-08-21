@@ -1,5 +1,4 @@
 #include "../../include/parser/parser.hpp"
-#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -64,8 +63,6 @@ AST::StmtPtr Parser::parseFuncDeclStmt()
     consume(TokenType::LBRACE, "Expected '{'");
     AST::Block block;
     while (!match(TokenType::RBRACE)) block.push_back(parseStmt());
-    
-    std::cout << "P: " << id.value << ": " << args.size() << ", " << block.size() << std::endl;
     
     return std::make_unique<AST::FuncDeclStmt>(id.value, type, std::move(args), std::move(block));
 }

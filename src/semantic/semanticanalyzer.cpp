@@ -1,6 +1,5 @@
 #include "../../include/semantic/semanticanalyzer.hpp"
 #include <algorithm>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,7 +27,6 @@ void SemanticAnalyzer::analyzeVarDeclStmt(AST::VarDeclStmt& vds)
     if (variables.top().find(vds.name) != variables.top().end()) throw std::runtime_error("Variable '" + typeToString(vds.type) + " " + vds.name + "' already declared");
 
     TypeValue exprType = analyzeExpr(*vds.expr);
-    std::cout << vds.name << std::endl;
     if (!canImplicitlyCast(exprType, vds.type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(vds.type));
 
     variables.top()[vds.name] = vds.type;
@@ -56,7 +54,6 @@ void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
 
 void SemanticAnalyzer::analyzeFuncDeclStmt(AST::FuncDeclStmt& fds)
 {
-    std::cout << "SA_1: " << fds.name << ": " << fds.args.size() << ", " << fds.block.size() << std::endl;
     if (functions.find(fds.name) != functions.end())
     {
         if (functions[fds.name].args == fds.args)
@@ -83,8 +80,6 @@ void SemanticAnalyzer::analyzeFuncDeclStmt(AST::FuncDeclStmt& fds)
     for (const auto& arg : args) variables.top()[arg.name] = arg.type;
     for (const auto& stmt : fds.block) analyzeStmt(*stmt);
     variables.pop();
-    
-    std::cout << "SA_2: " << fds.name << ": " << fds.args.size() << ", " << fds.block.size() << std::endl;
 }
 
 void SemanticAnalyzer::analyzeEchoStmt(AST::EchoStmt& echoStmt)

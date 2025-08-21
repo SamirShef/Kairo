@@ -21,3 +21,7 @@ else()
     llvm_map_components_to_libnames(LLVM_LIBS all)
     target_link_libraries(stc PRIVATE ${LLVM_LIBS})
 endif()
+
+# Install the compiler binary
+include(GNUInstallDirs)
+install(TARGETS stc RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

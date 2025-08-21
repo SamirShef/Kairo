@@ -1,7 +1,92 @@
 # StageLang
-**Stge** - multi-paradigm programming language.
+**Stge** - multi-paradigm programming language
 
 Compiler version: **v0.1** – C++ &amp; LLVM
+
+## Installation (Linux)
+
+### 1) Install dependencies
+- LLVM (dev headers and libs), Clang, CMake, C++ compiler, optionally Ninja
+- Debian/Ubuntu:
+  ```bash
+  sudo apt update
+  sudo apt install -y llvm-dev clang cmake build-essential ninja-build
+  ```
+- Arch/Manjaro:
+  ```bash
+  sudo pacman -S --needed llvm clang cmake ninja
+  ```
+- Fedora:
+  ```bash
+  sudo dnf install -y llvm-devel clang cmake gcc-c++ ninja-build
+  ```
+
+### 2) Clone the repository
+```bash
+git clone https://github.com/SamirShef/StageLang.git
+cd StageLang
+```
+
+### 3) Configure the build
+Use Ninja if available (faster), otherwise omit `-G Ninja` to use your default generator.
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+```
+If CMake cannot find LLVM, point it to your LLVM package config:
+```bash
+# Common paths (pick the one that exists on your system)
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/cmake/llvm
+# or on Ubuntu (versioned):
+# -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm
+```
+
+### 4) Build
+```bash
+cmake --build build -j"$(nproc)"
+```
+
+### 5) Install
+- User-local (recommended): installs `stc` into `~/.local/bin`
+  ```bash
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
+  cmake --build build -j"$(nproc)"
+  cmake --install build
+  ```
+- System-wide (optional): installs into `/usr/local/bin`
+  ```bash
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+  cmake --build build -j"$(nproc)"
+  sudo cmake --install build
+  ```
+
+### 6) Add to PATH (zsh)
+If `~/.local/bin` is not in your PATH:
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### 7) Verify
+```bash
+command -v stc
+stc examples/helloworld.st ./hello && ./hello
+```
+
+### 8) Uninstall
+Keep the `build` directory after installation. To uninstall later:
+```bash
+# User-local uninstall
+xargs -a build/install_manifest.txt -r rm -vf
+
+# System-wide uninstall
+sudo xargs -a build/install_manifest.txt -r rm -vf
+```
+
+### Troubleshooting
+- LLVM not found: pass the correct `-DLLVM_DIR=...` to CMake (see step 3). On Arch it is usually `/usr/lib/cmake/llvm`; on Ubuntu it can be `/usr/lib/llvm-20/lib/cmake/llvm`.
+- Linker issues: ensure `clang` is installed and in PATH. You can override the linker used by the compiler with `STC_LINKER=clang`.
+- PATH not updated: after editing `~/.zshrc`, run `source ~/.zshrc` or restart the shell.
 
 ## Types
 List of _primitive_ types:
