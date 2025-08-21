@@ -31,16 +31,16 @@ jobs:
   build-windows:
     runs-on: windows-latest
     env:
-      VCPKG_ROOT: ${{ runner.temp }}\vcpkg
-      VCPKG_BINARY_SOURCES: clear;gha
+      VCPKG_ROOT: "${{ runner.temp }}\\vcpkg"
+      VCPKG_BINARY_SOURCES: "clear;gha"
     steps:
     - uses: actions/checkout@v4
 
     - name: Restore vcpkg installed cache
       uses: actions/cache@v4
       with:
-        path: ${{ env.VCPKG_ROOT }}\\installed
-        key: vcpkg-installed-llvm-20-${{ runner.os }}-x64-windows
+        path: "${{ env.VCPKG_ROOT }}\\installed"
+        key: "vcpkg-installed-llvm-20-${{ runner.os }}-x64-windows"
 
     - name: Install vcpkg
       shell: pwsh
