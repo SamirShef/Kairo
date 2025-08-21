@@ -1,5 +1,5 @@
 # StageLang
-**Stge** - multi-paradigm programming language
+**Stage** - multi-paradigm programming language
 
 Compiler version: **v0.1** – C++ &amp; LLVM
 
