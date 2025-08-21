@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
-#    tags:
-#      - '*'
+    tags:
+      - '*'
   workflow_dispatch:
 
 jobs:
@@ -24,40 +24,6 @@ jobs:
 
     - name: Configure CMake
       run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(llvm-config-20 --cmakedir)
-
-    - name: Build
-      run: cmake --build build --config Release
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install LLVM 20.x
-      uses: KyleMayes/install-llvm-action@v2
-      with:
-        version: "20"
-
-    - name: Create Build Directory
-      run: cmake -E make_directory build
-
-    - name: Configure CMake (MSVC)
-      shell: pwsh
-      run: |
-        $llvmRoot = $env:LLVM_PATH
-        if (-not $llvmRoot) {
-          $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
-          if ($clang) { $llvmRoot = (Split-Path -Parent (Split-Path -Parent $clang.Source)) }
-        }
-        if (-not $llvmRoot) { Write-Error "Failed to determine LLVM root installation directory" }
-        $llvmCMakeDir = Join-Path $llvmRoot 'lib/cmake/llvm'
-        if (-not (Test-Path (Join-Path $llvmCMakeDir 'LLVMConfig.cmake'))) {
-          Write-Host "Diagnostics: listing $llvmCMakeDir"
-          if (Test-Path $llvmCMakeDir) { Get-ChildItem -Path $llvmCMakeDir -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { $_.FullName } }
-          Write-Error "LLVMConfig.cmake not found under $llvmCMakeDir"
-        }
-        Write-Host "Using LLVM_DIR=$llvmCMakeDir"
-        cmake -B build -G "Visual Studio 17 2022" -A x64 -DLLVM_DIR="$llvmCMakeDir" -DCMAKE_BUILD_TYPE=Release
 
     - name: Build
       run: cmake --build build --config Release
