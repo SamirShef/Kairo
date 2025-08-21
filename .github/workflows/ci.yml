@@ -30,29 +30,13 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    env:
-      VCPKG_ROOT: "${{ runner.temp }}\\vcpkg"
-      VCPKG_BINARY_SOURCES: "clear;gha"
     steps:
     - uses: actions/checkout@v4
 
-    - name: Restore vcpkg installed cache
-      uses: actions/cache@v4
+    - name: Install LLVM 20.x
+      uses: KyleMayes/install-llvm-action@v2
       with:
-        path: "${{ env.VCPKG_ROOT }}\\installed"
-        key: "vcpkg-installed-llvm-20-${{ runner.os }}-x64-windows"
-
-    - name: Install vcpkg
-      shell: pwsh
-      run: |
-        if (-not (Test-Path "$env:VCPKG_ROOT")) { git clone https://github.com/microsoft/vcpkg "$env:VCPKG_ROOT" }
-        & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
-
-    - name: Install LLVM via vcpkg (x64-windows)
-      shell: pwsh
-      run: |
-        & "$env:VCPKG_ROOT\vcpkg.exe" version
-        & "$env:VCPKG_ROOT\vcpkg.exe" install llvm:x64-windows
+        version: "20"
 
     - name: Create Build Directory
       run: cmake -E make_directory build
@@ -60,16 +44,20 @@ jobs:
     - name: Configure CMake (MSVC)
       shell: pwsh
       run: |
-        if (-not $env:VCPKG_ROOT) { Write-Error "VCPKG_ROOT is not set" }
-        $toolchain = Join-Path $env:VCPKG_ROOT 'scripts/buildsystems/vcpkg.cmake'
-        $llvmDir = Join-Path $env:VCPKG_ROOT 'installed/x64-windows/share/llvm'
-        if (-not (Test-Path (Join-Path $llvmDir 'LLVMConfig.cmake'))) {
-          Write-Host "Diagnostics: listing $llvmDir"
-          if (Test-Path $llvmDir) { Get-ChildItem -Path $llvmDir -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { $_.FullName } }
-          Write-Error "LLVMConfig.cmake not found in vcpkg install at $llvmDir"
+        $llvmRoot = $env:LLVM_PATH
+        if (-not $llvmRoot) {
+          $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+          if ($clang) { $llvmRoot = (Split-Path -Parent (Split-Path -Parent $clang.Source)) }
         }
-        Write-Host "Using LLVM_DIR=$llvmDir"
-        cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DVCPKG_TARGET_TRIPLET=x64-windows -DLLVM_DIR="$llvmDir" -DCMAKE_BUILD_TYPE=Release
+        if (-not $llvmRoot) { Write-Error "Failed to determine LLVM root installation directory" }
+        $llvmCMakeDir = Join-Path $llvmRoot 'lib/cmake/llvm'
+        if (-not (Test-Path (Join-Path $llvmCMakeDir 'LLVMConfig.cmake'))) {
+          Write-Host "Diagnostics: listing $llvmCMakeDir"
+          if (Test-Path $llvmCMakeDir) { Get-ChildItem -Path $llvmCMakeDir -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { $_.FullName } }
+          Write-Error "LLVMConfig.cmake not found under $llvmCMakeDir"
+        }
+        Write-Host "Using LLVM_DIR=$llvmCMakeDir"
+        cmake -B build -G "Visual Studio 17 2022" -A x64 -DLLVM_DIR="$llvmCMakeDir" -DCMAKE_BUILD_TYPE=Release
 
     - name: Build
       run: cmake --build build --config Release
