@@ -33,14 +33,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Ensure LLVM is on PATH (preinstalled on runner)
-      shell: pwsh
-      run: echo "C:\\Program Files\\LLVM\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-    - name: Show LLVM version
-      shell: pwsh
-      run: |
-        & "C:\\Program Files\\LLVM\\bin\\clang.exe" --version
+    - name: Install LLVM 20.x
+      uses: KyleMayes/install-llvm-action@v2
+      with:
+        version: "20"
 
     - name: Create Build Directory
       run: cmake -E make_directory build
@@ -48,36 +44,18 @@ jobs:
     - name: Configure CMake (MSVC)
       shell: pwsh
       run: |
-        $llvmCMakeDir = $null
-        $llvmConfig = Get-Command llvm-config.exe -ErrorAction SilentlyContinue
-        if ($llvmConfig) {
-          try {
-            $llvmCMakeDir = & $llvmConfig.Source --cmakedir
-          } catch {}
+        $llvmRoot = $env:LLVM_PATH
+        if (-not $llvmRoot) {
+          $clang = Get-Command clang.exe -ErrorAction SilentlyContinue
+          if ($clang) { $llvmRoot = (Split-Path -Parent (Split-Path -Parent $clang.Source)) }
         }
-
-        if (-not $llvmCMakeDir -or -not (Test-Path (Join-Path $llvmCMakeDir 'LLVMConfig.cmake'))) {
-          $candidates = @(
-            "C:\\Program Files\\LLVM\\lib\\cmake\\llvm",
-            "C:\\Program Files (x86)\\LLVM\\lib\\cmake\\llvm"
-          )
-          foreach ($c in $candidates) {
-            if (Test-Path (Join-Path $c 'LLVMConfig.cmake')) { $llvmCMakeDir = $c; break }
-          }
+        if (-not $llvmRoot) { Write-Error "Failed to determine LLVM root installation directory" }
+        $llvmCMakeDir = Join-Path $llvmRoot 'lib/cmake/llvm'
+        if (-not (Test-Path (Join-Path $llvmCMakeDir 'LLVMConfig.cmake'))) {
+          Write-Host "Diagnostics: listing $llvmCMakeDir"
+          if (Test-Path $llvmCMakeDir) { Get-ChildItem -Path $llvmCMakeDir -Recurse -ErrorAction SilentlyContinue | Select-Object -First 50 | ForEach-Object { $_.FullName } }
+          Write-Error "LLVMConfig.cmake not found under $llvmCMakeDir"
         }
-
-        if (-not $llvmCMakeDir -or -not (Test-Path (Join-Path $llvmCMakeDir 'LLVMConfig.cmake'))) {
-          $toolcache = 'C:\\hostedtoolcache\\windows\\LLVM'
-          if (Test-Path $toolcache) {
-            $match = Get-ChildItem -Path $toolcache -Recurse -Filter LLVMConfig.cmake -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($match) { $llvmCMakeDir = $match.DirectoryName }
-          }
-        }
-
-        if (-not $llvmCMakeDir -or -not (Test-Path (Join-Path $llvmCMakeDir 'LLVMConfig.cmake'))) {
-          Write-Error "Failed to locate LLVMConfig.cmake. Checked llvm-config, Program Files, and toolcache."
-        }
-
         Write-Host "Using LLVM_DIR=$llvmCMakeDir"
         cmake -B build -G "Visual Studio 17 2022" -A x64 -DLLVM_DIR="$llvmCMakeDir" -DCMAKE_BUILD_TYPE=Release
 
