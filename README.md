@@ -105,11 +105,43 @@ List of _primitive_ types:
 * bool literal - `true` or `false`
 * string literal - some string text between `"` (for example `"Hello world"`)
 
+## Operators
+The language supports the following operators. All binary operators are left-associative. Operator precedence (from highest to lowest) follows the order listed below within each group (top binds tighter):
+
+- Arithmetic:
+  - Unary: `-x`
+  - Multiplicative: `x * y`, `x / y`, `x % y`
+  - Additive: `x + y`, `x - y`
+
+- Comparisons (result type: `bool`):
+  - `x == y`, `x != y`
+  - `x > y`, `x >= y`, `x < y`, `x <= y`
+
+- Logical (operands must be `bool`):
+  - Unary: `!x`
+  - Binary: `x || y`, `x && y`
+  - Note: in this version, `||` binds tighter than `&&` (i.e., `a && b || c` is parsed as `a && (b || c)`). Use parentheses to make intent explicit.
+
+- Assignment:
+  - Simple: `x = expr;`
+  - Compound: `x += expr;`, `x -= expr;`, `x *= expr;`, `x /= expr;`, `x %= expr;`
+
+- Grouping and calls:
+  - Grouping: `(expr)`
+  - Function call: `name(arg1, arg2, ...)`
+
+Type rules (summary):
+- Arithmetic operators work on numeric types; implicit widening casts are allowed (`int -> float -> double`).
+- Comparisons allow numeric comparisons and produce `bool`.
+- Logical operators require `bool` operands and produce `bool`.
+- Assignment (incl. compound) requires the right-hand side to be implicitly castable to the variable type.
+
 ## Syntax
 List of statements:
 * [Global variables definition](#global-variables-definition)
 * [Function definition](#function-definition)
 * [Local variables definition](#local-variables-definition)
+* [If/Else statements](#if-else-statements)
 * [Echo](#echo-statement)
 
 > [!NOTE]
@@ -163,12 +195,60 @@ func void test()
 > A function named `main` is the entry point to the project. If you forgot to create a definition for this function, the compiler will not compile your code into an executable file. The type of this function can be any.
 
 ## Local Variables Definition
-Local variables definition like global, but you can initialized but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted.
+Local variables definition like global, but you can initialized but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted. For example:
+```C++
+func int main()
+{
+    var int a = 10;
+
+    return 0;
+}
+```
+
+## If/Else Statements
+For if statement definition you need use the keyword `if`, conditional expression between round brackets and block of statements. If you need define else statement too, you need use the keyword `else` and block of statements. For example:
+
+```C++
+func int main()
+{
+    var int a = 10;
+    var int b = 20;
+
+    if (a > b)
+    {
+        a *= 2;
+        echo a;
+    }
+    else
+    {
+        b /= a;
+        echo b + a;
+    }
+    
+    return 0;
+}
+```
+
+> [!TIP]
+> If block of statements in `if` or `else` branch have only 1 statement, uou don't have to specify braces. For example:
+> ```C++
+> func int main()
+> {
+>     var int a = 10;
+>     var int b = 20;
+>
+>     if (a == b) echo "a equals b";
+>     else if (a < b) echo "a less then b";
+>     else echo "a greater then b";
+> 
+>     return 0;
+> }
+> ```
 
 ## Echo Statement
 Echo statement can write any value in console. For use echo you need use keyword `echo` and some expression. For example:
 ```C++
-func main()
+func int main()
 {
     echo "Hello world!";
     echo 10 + 2 * (2 + 312);

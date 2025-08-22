@@ -1,5 +1,6 @@
 #include "../../include/semantic/semanticanalyzer.hpp"
 #include <algorithm>
+#include <llvm/IR/Type.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -17,6 +18,8 @@ void SemanticAnalyzer::analyzeStmt(AST::Stmt& stmt)
     if (auto vds = dynamic_cast<AST::VarDeclStmt*>(&stmt)) analyzeVarDeclStmt(*vds);
     else if (auto vas = dynamic_cast<AST::VarAsgnStmt*>(&stmt)) analyzeVarAsgnStmt(*vas);
     else if (auto fds = dynamic_cast<AST::FuncDeclStmt*>(&stmt)) analyzeFuncDeclStmt(*fds);
+    else if (auto rs = dynamic_cast<AST::ReturnStmt*>(&stmt)) analyzeReturnStmt(*rs);
+    else if (auto ies = dynamic_cast<AST::IfElseStmt*>(&stmt)) analyzeIfElseStmt(*ies);
     else if (auto es = dynamic_cast<AST::EchoStmt*>(&stmt)) analyzeEchoStmt(*es);
 }
 
@@ -76,15 +79,52 @@ void SemanticAnalyzer::analyzeFuncDeclStmt(AST::FuncDeclStmt& fds)
 
     functions.emplace(fds.name, FunctionInfo{ fds.retType, args });
 
+    functionReturnTypes.push(fds.retType);
     variables.emplace(std::map<std::string, TypeValue>{});
     for (const auto& arg : args) variables.top()[arg.name] = arg.type;
     for (const auto& stmt : fds.block) analyzeStmt(*stmt);
     variables.pop();
+    functionReturnTypes.pop();
 }
 
-void SemanticAnalyzer::analyzeEchoStmt(AST::EchoStmt& echoStmt)
+void SemanticAnalyzer::analyzeReturnStmt(AST::ReturnStmt& rs)
 {
-    analyzeExpr(*echoStmt.expr);
+    if (functionReturnTypes.empty()) throw std::runtime_error("'return' outside of function");
+    TypeValue expected = functionReturnTypes.top();
+
+    if (!rs.expr)
+    {
+        if (expected != TypeValue::VOID) throw std::runtime_error("Missing return value for function returning " + typeToString(expected) + "");
+        return;
+    }
+
+    TypeValue actual = analyzeExpr(*rs.expr);
+    if (!canImplicitlyCast(actual, expected)) throw std::runtime_error("Type error: Cannot implicitly cast return value from " + typeToString(actual) + " to " + typeToString(expected));
+}
+
+void SemanticAnalyzer::analyzeIfElseStmt(AST::IfElseStmt& ies)
+{
+    if (functionReturnTypes.size() == 0) throw std::runtime_error("If statement cannot be outside function");
+
+    TypeValue condType = analyzeExpr(*ies.condExpr);
+
+    if (condType != TypeValue::BOOL) throw std::runtime_error("Conditional expression must be return bool value");
+
+    variables.emplace(std::map<std::string, TypeValue>{});
+    for (const auto& stmt : ies.thenBranch) analyzeStmt(*stmt);
+    variables.pop();
+
+    if (ies.elseBranch.size() != 0)
+    {
+        variables.emplace(std::map<std::string, TypeValue>{});
+        for (const auto& stmt : ies.elseBranch) analyzeStmt(*stmt);
+        variables.pop();
+    }
+}
+
+void SemanticAnalyzer::analyzeEchoStmt(AST::EchoStmt& es)
+{
+    analyzeExpr(*es.expr);
 }
 
 TypeValue SemanticAnalyzer::analyzeExpr(const AST::Expr& expr)
@@ -195,10 +235,7 @@ bool SemanticAnalyzer::canImplicitlyCast(TypeValue l, TypeValue r)
 {
     if (l == r) return true;
 
-    if (castsTable.find(l) != castsTable.end())
-    {
-        if (std::find(castsTable[l].begin(), castsTable[l].end(), r) != castsTable[l].end()) return true;
-    }
+    if (castsTable.find(l) != castsTable.end()) if (std::find(castsTable[l].begin(), castsTable[l].end(), r) != castsTable[l].end()) return true;
 
     return false;
 }
@@ -206,15 +243,9 @@ bool SemanticAnalyzer::canImplicitlyCast(TypeValue l, TypeValue r)
 bool SemanticAnalyzer::isConstExpr(const AST::Expr& expr) const
 {
     if (dynamic_cast<const AST::Literal*>(&expr)) return true;
-    if (auto bin = dynamic_cast<const AST::BinaryExpr*>(&expr))
-    {
-        return isConstExpr(*bin->left) && isConstExpr(*bin->right);
-    }
-    if (auto un = dynamic_cast<const AST::UnaryExpr*>(&expr))
-    {
-        return isConstExpr(*un->expr);
-    }
-    // Вызовы функций, обращения к переменным и т.п. — не константы
+    if (auto bin = dynamic_cast<const AST::BinaryExpr*>(&expr)) return isConstExpr(*bin->left) && isConstExpr(*bin->right);
+    if (auto un = dynamic_cast<const AST::UnaryExpr*>(&expr)) return isConstExpr(*un->expr);
+    
     return false;
 }
 
@@ -226,6 +257,8 @@ std::string typeToString(TypeValue type) {
         case TypeValue::DOUBLE: return "double";
         case TypeValue::CHAR: return "char";
         case TypeValue::BOOL: return "bool";
+        case TypeValue::STRING: return "string";
+        case TypeValue::VOID: return "void";
         default: return "unknown";
     }
 }

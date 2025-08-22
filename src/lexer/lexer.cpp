@@ -19,6 +19,8 @@ Lexer::Lexer(const std::string initSource)
     keywords["var"] = TokenType::VAR;
     keywords["func"] = TokenType::FUNC;
     keywords["return"] = TokenType::RETURN;
+    keywords["if"] = TokenType::IF;
+    keywords["else"] = TokenType::ELSE;
     keywords["echo"] = TokenType::ECHO;
 }
 

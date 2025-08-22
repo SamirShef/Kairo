@@ -1,5 +1,4 @@
 #include "../../include/codegen/codegenerator.hpp"
-#include <iostream>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constant.h>
@@ -94,6 +93,7 @@ void CodeGenerator::generateStmt(const AST::Stmt& stmt)
     else if (auto fds = dynamic_cast<const AST::FuncDeclStmt*>(&stmt)) generateFuncDeclStmt(*fds);
     else if (auto fcs = dynamic_cast<const AST::FuncCallStmt*>(&stmt)) generateFuncCallStmt(*fcs);
     else if (auto rs = dynamic_cast<const AST::ReturnStmt*>(&stmt)) generateReturnStmt(*rs);
+    else if (auto ies = dynamic_cast<const AST::IfElseStmt*>(&stmt)) generateIfElseStmt(*ies);
     else if (auto es = dynamic_cast<const AST::EchoStmt*>(&stmt)) generateEchoStmt(*es);
 }
 
@@ -103,14 +103,8 @@ void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
     
     if (builder.GetInsertBlock() == nullptr)
     {
-        // Попробуем сконвертировать вычисленное значение в константу, если это выражение из литералов
         llvm::Constant* constantInit = llvm::dyn_cast<llvm::Constant>(initValue);
-        if (!constantInit)
-        {
-            // Для глобалов разрешены только константы; здесь семантика уже проверила константность.
-            // Но некоторые значения могли вернуться как инструкции. Попробуем привести тип: если это ConstantExpr
-            if (auto* ce = llvm::dyn_cast<llvm::ConstantExpr>(initValue)) constantInit = ce;
-        }
+        if (!constantInit) if (auto* ce = llvm::dyn_cast<llvm::ConstantExpr>(initValue)) constantInit = ce;
         if (!constantInit) throw std::runtime_error("Global variable initializer must be a constant");
 
         llvm::GlobalVariable* gv = new llvm::GlobalVariable(*module, getLLVMType(stmt.type), false, llvm::GlobalValue::ExternalLinkage, constantInit, stmt.name);
@@ -119,7 +113,6 @@ void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
     }
 
     llvm::AllocaInst* alloca = builder.CreateAlloca(getLLVMType(stmt.type), nullptr, stmt.name + ".addr");
-    std::cout << (alloca == nullptr) << std::endl;
 
     builder.CreateStore(initValue, alloca);
     setNamedValue(stmt.name, alloca);
@@ -204,6 +197,96 @@ void CodeGenerator::generateReturnStmt(const AST::ReturnStmt& stmt)
     else builder.CreateRet(generateExpr(*stmt.expr));
 }
 
+void CodeGenerator::generateIfElseStmt(const AST::IfElseStmt& stmt)
+{
+    llvm::Value* cond = generateExpr(*stmt.condExpr);
+    
+    if (!cond->getType()->isIntegerTy(1))
+    {
+        if (cond->getType()->isIntegerTy()) cond = builder.CreateICmpNE(cond, llvm::ConstantInt::get(cond->getType(), 0), "ifcond");
+        else if (cond->getType()->isFloatTy() || cond->getType()->isDoubleTy()) cond = builder.CreateFCmpONE(cond, llvm::ConstantFP::get(cond->getType(), 0.0), "ifcond");
+        else throw std::runtime_error("Invalid condition type in if statement");
+    }
+    
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+    
+    llvm::BasicBlock* thenBB = llvm::BasicBlock::Create(context, "then", function);
+    llvm::BasicBlock* elseBB = llvm::BasicBlock::Create(context, "else", function);
+    llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(context, "ifcont", function);
+    
+    builder.CreateCondBr(cond, thenBB, elseBB);
+    
+    builder.SetInsertPoint(thenBB);
+    pushScope();
+    
+    for (const auto& stmt : stmt.thenBranch) generateStmt(*stmt);
+    
+    if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(mergeBB);
+    
+    popScope();
+    
+    builder.SetInsertPoint(elseBB);
+    pushScope();
+    
+    for (const auto& stmt : stmt.elseBranch) generateStmt(*stmt);
+    
+    if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(mergeBB);
+    
+    popScope();
+    
+    builder.SetInsertPoint(mergeBB);
+}
+
+void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
+{
+    llvm::Value* value = generateExpr(*stmt.expr);
+    
+    std::string formatStr;
+    llvm::Value* promoted = value;
+
+    if (value->getType()->isIntegerTy(32)) formatStr = "%d\n";
+    else if (value->getType()->isFloatTy())
+    {
+        formatStr = "%f\n";
+        promoted = builder.CreateFPExt(value, llvm::Type::getDoubleTy(context));
+    }
+    else if (value->getType()->isDoubleTy()) formatStr = "%lf\n";
+    else if (value->getType()->isIntegerTy(8))
+    {
+        formatStr = "%c\n";
+        promoted = builder.CreateSExt(value, llvm::Type::getInt8Ty(context));
+    }
+    else if (value->getType()->isIntegerTy(1))
+    {
+        formatStr = "%s\n";
+
+        llvm::GlobalVariable* trueGV = builder.CreateGlobalString("true", "true_str");
+        llvm::GlobalVariable* falseGV = builder.CreateGlobalString("false", "false_str");
+
+        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+        llvm::Value* truePtr = builder.CreateInBoundsGEP(trueGV->getValueType(), trueGV, {zero, zero}, "true_ptr");
+        llvm::Value* falsePtr = builder.CreateInBoundsGEP(falseGV->getValueType(), falseGV, {zero, zero}, "false_ptr");
+
+        promoted = builder.CreateSelect(value, truePtr, falsePtr, "bool_str");
+    }
+    else if (value->getType()->isPointerTy()) formatStr = "%s\n";
+    else formatStr = "%d\n";
+    
+    llvm::GlobalVariable* formatGV = builder.CreateGlobalString(formatStr, "printf_format");
+    llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* format = builder.CreateInBoundsGEP(formatGV->getValueType(), formatGV, {zero, zero}, "printf_format_ptr");
+    
+    llvm::Function* printfFunc = module->getFunction("printf");
+    if (!printfFunc)
+    {
+        std::vector<llvm::Type*> printfArgs = {llvm::Type::getInt8Ty(context)};
+        llvm::FunctionType* printfType = llvm::FunctionType::get(llvm::Type::getInt32Ty(context), printfArgs, true);
+        printfFunc = llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", *module);
+    }
+    
+    builder.CreateCall(printfFunc, { format, promoted });
+}
+
 llvm::Value* CodeGenerator::generateExpr(const AST::Expr& expr)
 {
     if (auto lit = dynamic_cast<const AST::Literal*>(&expr)) return generateLiteral(*lit);
@@ -228,7 +311,7 @@ llvm::Value* CodeGenerator::generateLiteral(const AST::Literal& literal)
         case TypeValue::STRING:
         {
             const auto& str = std::get<std::string>(value);
-            return builder.CreateGlobalStringPtr(str);
+            return builder.CreateGlobalString(str);
         }
         default: throw std::runtime_error("Unknown literal type in generateLiteral");
     }
@@ -323,47 +406,6 @@ llvm::Value* CodeGenerator::generateFuncCallExpr(const AST::FuncCallExpr& funcEx
     if (callee->getReturnType()->isVoidTy()) return nullptr;
     
     return call;
-}
-
-void CodeGenerator::generateEchoStmt(const AST::EchoStmt& echoStmt)
-{
-    llvm::Value* value = generateExpr(*echoStmt.expr);
-    
-    std::string formatStr;
-    llvm::Value* promoted = value;
-
-    if (value->getType()->isIntegerTy(32)) formatStr = "%d\n";
-    else if (value->getType()->isFloatTy())
-    {
-        formatStr = "%f\n";
-        promoted = builder.CreateFPExt(value, llvm::Type::getDoubleTy(context));
-    }
-    else if (value->getType()->isDoubleTy()) formatStr = "%lf\n";
-    else if (value->getType()->isIntegerTy(8))
-    {
-        formatStr = "%c\n";
-        promoted = builder.CreateSExt(value, llvm::Type::getInt32Ty(context));
-    }
-    else if (value->getType()->isIntegerTy(1))
-    {
-        formatStr = "%d\n";
-        promoted = builder.CreateZExt(value, llvm::Type::getInt32Ty(context));
-    }
-    else if (value->getType()->isPointerTy()) formatStr = "%s\n";
-    else formatStr = "%d\n";
-    
-    llvm::Value* format = builder.CreateGlobalStringPtr(formatStr, "printf_format");
-    
-    llvm::Function* printfFunc = module->getFunction("printf");
-    if (!printfFunc)
-    {
-        std::vector<llvm::Type*> printfArgs = {llvm::Type::getInt8Ty(context)};
-        llvm::FunctionType* printfType = llvm::FunctionType::get(llvm::Type::getInt32Ty(context), printfArgs, true);
-        printfFunc = llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", *module);
-    }
-    
-    std::vector<llvm::Value*> args = {format, promoted};
-    builder.CreateCall(printfFunc, args);
 }
 
 void CodeGenerator::printIR() const

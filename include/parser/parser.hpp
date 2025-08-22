@@ -24,6 +24,7 @@ private:
     AST::StmtPtr parseFuncCallStmt();
     AST::StmtPtr parseVarAsgnStmt();
     AST::StmtPtr parseReturnStmt();
+    AST::StmtPtr parseIfElseStmt();
     AST::StmtPtr parseEchoStmt();
 
     AST::ExprPtr createCompoundAssignmentOperator(Token&);

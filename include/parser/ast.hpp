@@ -119,6 +119,18 @@ public:
         ~ReturnStmt() override = default;
     };
 
+    class IfElseStmt : public Stmt
+    {
+    public:
+        ExprPtr condExpr;
+        Block thenBranch;
+        Block elseBranch;
+
+        IfElseStmt(ExprPtr ce, Block tb, Block eb) : condExpr(std::move(ce)), thenBranch(std::move(tb)), elseBranch(std::move(eb)) {}
+
+        ~IfElseStmt() override = default;
+    };
+
     class EchoStmt : public Stmt
     {
     public:

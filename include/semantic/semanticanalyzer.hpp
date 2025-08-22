@@ -12,6 +12,7 @@ public:
 
 private:
     std::stack<std::map<std::string, TypeValue>> variables;
+    std::stack<TypeValue> functionReturnTypes;
 
     struct FunctionInfo
     {
@@ -23,12 +24,15 @@ private:
     {
         { TypeValue::INT, { TypeValue::FLOAT, TypeValue::DOUBLE } },
         { TypeValue::FLOAT, { TypeValue::DOUBLE } },
+        { TypeValue::CHAR, { TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE } }
     };
 
     void analyzeStmt(AST::Stmt&);
     void analyzeVarDeclStmt(AST::VarDeclStmt&);
     void analyzeVarAsgnStmt(AST::VarAsgnStmt&);
     void analyzeFuncDeclStmt(AST::FuncDeclStmt&);
+    void analyzeReturnStmt(AST::ReturnStmt&);
+    void analyzeIfElseStmt(AST::IfElseStmt&);
     void analyzeEchoStmt(AST::EchoStmt&);
 
     TypeValue analyzeExpr(const AST::Expr&);

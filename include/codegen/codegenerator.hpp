@@ -28,8 +28,9 @@ private:
     void generateVarDeclStmt(const AST::VarDeclStmt&);
     void generateVarAsgnStmt(const AST::VarAsgnStmt&);
     void generateFuncDeclStmt(const AST::FuncDeclStmt&);
-    void generateReturnStmt(const AST::ReturnStmt&);
     void generateFuncCallStmt(const AST::FuncCallStmt&);
+    void generateReturnStmt(const AST::ReturnStmt&);
+    void generateIfElseStmt(const AST::IfElseStmt&);
     void generateEchoStmt(const AST::EchoStmt&);
 
     llvm::Value* generateExpr(const AST::Expr&);

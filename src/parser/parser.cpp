@@ -24,6 +24,7 @@ AST::StmtPtr Parser::parseStmt()
         return parseVarAsgnStmt();
     }
     else if (match(TokenType::RETURN)) return parseReturnStmt();
+    else if (match(TokenType::IF)) return parseIfElseStmt();
     else if (match(TokenType::ECHO)) return parseEchoStmt();
     else throw std::runtime_error("Unexpected token: '" + peek().value + "'" + " -> " + std::to_string(peek().line) + ":" + std::to_string(peek().column));
 }
@@ -104,6 +105,26 @@ AST::StmtPtr Parser::parseReturnStmt()
     consume(TokenType::SEMICOLON, "Expected ';'");
 
     return std::make_unique<AST::ReturnStmt>(std::move(expr));
+}
+
+AST::StmtPtr Parser::parseIfElseStmt()
+{
+    consume(TokenType::LPAREN, "Expected '('");
+    AST::ExprPtr condExpr = parseExpr();
+    consume(TokenType::RPAREN, "Expected ')'");
+
+    AST::Block thenBranch;
+    if (!match(TokenType::LBRACE)) thenBranch.push_back(parseStmt());
+    else while (!match(TokenType::RBRACE)) thenBranch.push_back(parseStmt());
+
+    AST::Block elseBranch;
+    if (match(TokenType::ELSE))
+    {
+        if (!match(TokenType::LBRACE)) elseBranch.push_back(parseStmt());
+        else while (!match(TokenType::RBRACE)) elseBranch.push_back(parseStmt());
+    }
+
+    return std::make_unique<AST::IfElseStmt>(std::move(condExpr), std::move(thenBranch), std::move(elseBranch));
 }
 
 AST::StmtPtr Parser::parseEchoStmt()
