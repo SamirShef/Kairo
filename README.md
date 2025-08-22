@@ -226,10 +226,7 @@ func void test()
 > A function named `main` is the entry point to the project. If you forgot to create a definition for this function, the compiler will not compile your code into an executable file. The type of this function can be any.
 
 ## Local Variables Definition
-<<<<<<< HEAD
-Local variables definition like global, but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted.
-=======
-Local variables definition like global, but you can initialized but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted. For example:
+Local variables definition like global, but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted. For example:
 ```C++
 func int main()
 {
@@ -278,7 +275,6 @@ func int main()
 >     return 0;
 > }
 > ```
->>>>>>> 359e1e3 (Add if/else statements)
 
 ## Echo Statement
 Echo statement can write any value in console. For use echo you need use keyword `echo` and some expression. For example:
