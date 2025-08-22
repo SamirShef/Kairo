@@ -13,6 +13,7 @@ public:
 private:
     std::stack<std::map<std::string, TypeValue>> variables;
     std::stack<TypeValue> functionReturnTypes;
+    int loopDepth = 0;
 
     struct FunctionInfo
     {
@@ -33,6 +34,11 @@ private:
     void analyzeFuncDeclStmt(AST::FuncDeclStmt&);
     void analyzeReturnStmt(AST::ReturnStmt&);
     void analyzeIfElseStmt(AST::IfElseStmt&);
+    void analyzeWhileLoopStmt(AST::WhileLoopStmt&);
+    void analyzeDoWhileLoopStmt(AST::DoWhileLoopStmt&);
+    void analyzeForLoopStmt(AST::ForLoopStmt&);
+    void analyzeBreakStmt();
+    void analyzeContinueStmt();
     void analyzeEchoStmt(AST::EchoStmt&);
 
     TypeValue analyzeExpr(const AST::Expr&);

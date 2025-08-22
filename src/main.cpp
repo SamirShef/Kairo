@@ -29,7 +29,6 @@ int main(int argc, char** argv)
         std::cerr << "Usage: stc <source_file>.st <executable_name>" << std::endl;
         return 1;
     }
-
     const std::string sourcePath = argv[1];
     std::string executablePath = argv[2];
     
@@ -56,7 +55,6 @@ int main(int argc, char** argv)
     }
 
     std::string fileContent( (std::istreambuf_iterator<char>(sourceFile)), (std::istreambuf_iterator<char>()));
-
     Lexer lexer = Lexer(fileContent);
     std::vector<Token> tokens = lexer.tokenize();
     
@@ -103,7 +101,8 @@ int main(int argc, char** argv)
         while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) result.pop_back();
         return result;
     };
-    auto defaultTripleForHost = []() -> std::string {
+    auto defaultTripleForHost = []() -> std::string
+    {
         #if defined(_WIN32)
             #if defined(__aarch64__) || defined(_M_ARM64)
                 return "aarch64-pc-windows-msvc";
@@ -158,7 +157,7 @@ int main(int argc, char** argv)
     }
 
     llvm::legacy::PassManager pass;
-    // Универсальный вызов для большинства версий LLVM: 4 аргумента (с nullptr для asm-стрима)
+    
     auto fileType = static_cast<llvm::CodeGenFileType>(1); // 1 = Object file
     if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType))
     {
@@ -168,6 +167,7 @@ int main(int argc, char** argv)
 
     pass.run(*module);
     dest.flush();
+    dest.close();
 
     const char* envLinker = std::getenv("STC_LINKER");
     std::string linker = envLinker ? std::string(envLinker) : std::string("clang");
@@ -178,7 +178,8 @@ int main(int argc, char** argv)
     #else
     std::string linkCmd = linker + std::string(" ") + std::string("\"") + objectPath + std::string("\"") + " -o " + std::string("\"") + executablePath + std::string("\"") + " -no-pie";
     #endif
-    auto runAndCapture = [](const std::string& cmd) -> std::pair<int, std::string> {
+    auto runAndCapture = [](const std::string& cmd) -> std::pair<int, std::string>
+    {
         std::string output;
         #if defined(_WIN32)
         std::unique_ptr<FILE, int(*)(FILE*)> pipe(_popen(cmd.c_str(), "r"), _pclose);
@@ -200,12 +201,15 @@ int main(int argc, char** argv)
     auto [linkRes, linkOut] = runAndCapture(linkCmd);
     if (linkRes != 0)
     {
-        std::cerr << "Link command: " << linkCmd << '\n';
+        std::cerr << "Link command: " << linkCmd << std::endl;
         std::cerr << linkOut << std::endl;
         std::cerr << "Linking failed with code " << linkRes << std::endl;
         return 1;
     }
 
     std::cout << "Built executable: " << executablePath << std::endl;
+    
+    if (std::remove(objectPath.c_str()) != 0) std::cerr << "Warning: Failed to remove object file: " << objectPath << std::endl;
+    
     return 0;
 }

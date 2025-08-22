@@ -3,6 +3,7 @@
 #include "../lexer/token.hpp"
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace AST
@@ -129,6 +130,53 @@ public:
         IfElseStmt(ExprPtr ce, Block tb, Block eb) : condExpr(std::move(ce)), thenBranch(std::move(tb)), elseBranch(std::move(eb)) {}
 
         ~IfElseStmt() override = default;
+    };
+
+    class WhileLoopStmt : public Stmt
+    {
+    public:
+        ExprPtr condExpr;
+        Block block;
+
+        WhileLoopStmt(ExprPtr ce, Block b) : condExpr(std::move(ce)), block(std::move(b)) {}
+
+        ~WhileLoopStmt() override = default;
+    };
+    
+    class DoWhileLoopStmt : public Stmt
+    {
+    public:
+        ExprPtr condExpr;
+        Block block;
+
+        DoWhileLoopStmt(ExprPtr ce, Block b) : condExpr(std::move(ce)), block(std::move(b)) {}
+
+        ~DoWhileLoopStmt() override = default;
+    };
+
+    class ForLoopStmt : public Stmt
+    {
+    public:
+        StmtPtr iterator;
+        ExprPtr condExpr;
+        StmtPtr iterationStmt;
+        Block block;
+
+        ForLoopStmt(StmtPtr i, ExprPtr ce, StmtPtr is, Block b) : iterator(std::move(i)), condExpr(std::move(ce)), iterationStmt(std::move(is)), block(std::move(b)) {}
+
+        ~ForLoopStmt() override = default;
+    };
+
+    class BreakStmt : public Stmt
+    {
+    public:
+        ~BreakStmt() override = default;
+    };
+
+    class ContinueStmt : public Stmt
+    {
+    public:
+        ~ContinueStmt() override = default;
     };
 
     class EchoStmt : public Stmt

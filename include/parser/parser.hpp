@@ -22,9 +22,14 @@ private:
     AST::StmtPtr parseVarDeclStmt();
     AST::StmtPtr parseFuncDeclStmt();
     AST::StmtPtr parseFuncCallStmt();
-    AST::StmtPtr parseVarAsgnStmt();
+    AST::StmtPtr parseVarAsgnStmt(bool);
     AST::StmtPtr parseReturnStmt();
     AST::StmtPtr parseIfElseStmt();
+    AST::StmtPtr parseWhileLoopStmt();
+    AST::StmtPtr parseDoWhileLoopStmt();
+    AST::StmtPtr parseForLoopStmt();
+    AST::StmtPtr parseBreakStmt();
+    AST::StmtPtr parseContinueStmt();
     AST::StmtPtr parseEchoStmt();
 
     AST::ExprPtr createCompoundAssignmentOperator(Token&);

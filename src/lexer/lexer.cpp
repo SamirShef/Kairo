@@ -21,6 +21,11 @@ Lexer::Lexer(const std::string initSource)
     keywords["return"] = TokenType::RETURN;
     keywords["if"] = TokenType::IF;
     keywords["else"] = TokenType::ELSE;
+    keywords["while"] = TokenType::WHILE;
+    keywords["do"] = TokenType::DO;
+    keywords["for"] = TokenType::FOR;
+    keywords["break"] = TokenType::BREAK;
+    keywords["continue"] = TokenType::CONTINUE;
     keywords["echo"] = TokenType::ECHO;
 }
 
@@ -32,13 +37,10 @@ std::vector<Token> Lexer::tokenize()
     {
         const char c = peek();
         if (std::isspace(c) || c == '\n') advance();
-        else if (peek() == '/')
+        else if (peek() == '/' && peek(1) == '/')
         {
-            if (peek(1) == '/')
-            {
-                if (peek(2) == '/') scipMultilineComments();
-                else scipComments();
-            }
+            if (peek(2) == '/') scipMultilineComments();
+            else scipComments();
         }
         else if (std::isalpha(c) || c == '_') tokens.push_back(tokenizeIdentifierOrKeywordOrBoolLiteral());
         else if (std::isdigit(c)) tokens.push_back(tokenizeNumberLiteral());
@@ -160,6 +162,11 @@ Token Lexer::tokenizeOperator()
             {
                 advance(); advance();
                 return Token(TokenType::MINUS_ASSIGN, "-=", tmpLine, tmpColumn);
+            }
+            else if (peek(1) == '>')
+            {
+                advance(); advance();
+                return Token(TokenType::NEXT, "->", tmpLine, tmpColumn);
             }
 
             advance();

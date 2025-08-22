@@ -20,6 +20,11 @@ void SemanticAnalyzer::analyzeStmt(AST::Stmt& stmt)
     else if (auto fds = dynamic_cast<AST::FuncDeclStmt*>(&stmt)) analyzeFuncDeclStmt(*fds);
     else if (auto rs = dynamic_cast<AST::ReturnStmt*>(&stmt)) analyzeReturnStmt(*rs);
     else if (auto ies = dynamic_cast<AST::IfElseStmt*>(&stmt)) analyzeIfElseStmt(*ies);
+    else if (auto wls = dynamic_cast<AST::WhileLoopStmt*>(&stmt)) analyzeWhileLoopStmt(*wls);
+    else if (auto dwls = dynamic_cast<AST::DoWhileLoopStmt*>(&stmt)) analyzeDoWhileLoopStmt(*dwls);
+    else if (auto fls = dynamic_cast<AST::ForLoopStmt*>(&stmt)) analyzeForLoopStmt(*fls);
+    else if (dynamic_cast<AST::BreakStmt*>(&stmt)) analyzeBreakStmt();
+    else if (dynamic_cast<AST::ContinueStmt*>(&stmt)) analyzeContinueStmt();
     else if (auto es = dynamic_cast<AST::EchoStmt*>(&stmt)) analyzeEchoStmt(*es);
 }
 
@@ -120,6 +125,68 @@ void SemanticAnalyzer::analyzeIfElseStmt(AST::IfElseStmt& ies)
         for (const auto& stmt : ies.elseBranch) analyzeStmt(*stmt);
         variables.pop();
     }
+}
+
+void SemanticAnalyzer::analyzeWhileLoopStmt(AST::WhileLoopStmt& wls)
+{
+    if (functionReturnTypes.size() == 0) throw std::runtime_error("While statement cannot be outside function");
+
+    TypeValue condType = analyzeExpr(*wls.condExpr);
+
+    if (condType != TypeValue::BOOL) throw std::runtime_error("Conditional expression must be return bool value");
+
+    variables.emplace(std::map<std::string, TypeValue>{});
+    loopDepth++;
+    for (const auto& stmt : wls.block) analyzeStmt(*stmt);
+    loopDepth--;
+    variables.pop();
+}
+
+void SemanticAnalyzer::analyzeDoWhileLoopStmt(AST::DoWhileLoopStmt& dwls)
+{
+    if (functionReturnTypes.size() == 0) throw std::runtime_error("While statement cannot be outside function");
+
+    TypeValue condType = analyzeExpr(*dwls.condExpr);
+
+    if (condType != TypeValue::BOOL) throw std::runtime_error("Conditional expression must be return bool value");
+
+    variables.emplace(std::map<std::string, TypeValue>{});
+    loopDepth++;
+    for (const auto& stmt : dwls.block) analyzeStmt(*stmt);
+    loopDepth--;
+    variables.pop();
+}
+
+void SemanticAnalyzer::analyzeForLoopStmt(AST::ForLoopStmt& fls)
+{
+    if (functionReturnTypes.size() == 0) throw std::runtime_error("While statement cannot be outside function");
+    
+    variables.emplace(std::map<std::string, TypeValue>{});
+
+    analyzeStmt(*fls.iterator);
+
+    TypeValue condType = analyzeExpr(*fls.condExpr);
+
+    if (condType != TypeValue::BOOL) throw std::runtime_error("Conditional expression must be return bool value");
+
+    analyzeStmt(*fls.iterationStmt);
+    
+    loopDepth++;
+    for (const auto& stmt : fls.block) analyzeStmt(*stmt);
+    loopDepth--;
+    variables.pop();
+}
+
+void SemanticAnalyzer::analyzeBreakStmt()
+{
+    if (functionReturnTypes.size() == 0) throw std::runtime_error("break cannot be outside function");
+    if (loopDepth == 0) throw std::runtime_error("break must be inside a loop");
+}
+
+void SemanticAnalyzer::analyzeContinueStmt()
+{
+    if (functionReturnTypes.size() == 0) throw std::runtime_error("continue cannot be outside function");
+    if (loopDepth == 0) throw std::runtime_error("continue must be inside a loop");
 }
 
 void SemanticAnalyzer::analyzeEchoStmt(AST::EchoStmt& es)

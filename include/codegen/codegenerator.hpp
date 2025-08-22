@@ -15,6 +15,7 @@ private:
     llvm::IRBuilder<> builder;
     std::unique_ptr<llvm::Module> module;
     std::stack<std::map<std::string, llvm::Value*>> scopeStack;
+    std::stack<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> loopBlocks;
 
     llvm::Type* getLLVMType(TypeValue);
     llvm::Value* castToExpectedIfNeeded(llvm::Value* value, llvm::Type* expectedType);
@@ -31,6 +32,11 @@ private:
     void generateFuncCallStmt(const AST::FuncCallStmt&);
     void generateReturnStmt(const AST::ReturnStmt&);
     void generateIfElseStmt(const AST::IfElseStmt&);
+    void generateWhileLoopStmt(const AST::WhileLoopStmt&);
+    void generateDoWhileLoopStmt(const AST::DoWhileLoopStmt&);
+    void generateForLoopStmt(const AST::ForLoopStmt&);
+    void generateBreakStmt();
+    void generateContinueStmt();
     void generateEchoStmt(const AST::EchoStmt&);
 
     llvm::Value* generateExpr(const AST::Expr&);

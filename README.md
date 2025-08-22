@@ -1,7 +1,7 @@
 # StageLang
 **Stage** - multi-paradigm programming language
 
-Compiler version: **v0.2** – C++ &amp; LLVM
+Compiler version: **v0.3** – C++ &amp; LLVM
 
 ## Installation (Linux)
 
@@ -173,6 +173,9 @@ List of statements:
 * [Function definition](#function-definition)
 * [Local variables definition](#local-variables-definition)
 * [If/Else statements](#ifelse-statements)
+* [While loop](#while-loop)
+* [Do/while loop](#dowhile-loop)
+* [For loop](#for-loop)
 * [Echo](#echo-statement)
 
 > [!NOTE]
@@ -261,7 +264,7 @@ func int main()
 ```
 
 > [!TIP]
-> If block of statements in `if` or `else` branch have only 1 statement, uou don't have to specify braces. For example:
+> If block of statements in `if` or `else` branch have only 1 statement, you don't have to specify braces. For example:
 > ```C++
 > func int main()
 > {
@@ -271,6 +274,93 @@ func int main()
 >     if (a == b) echo "a equals b";
 >     else if (a < b) echo "a less then b";
 >     else echo "a greater then b";
+> 
+>     return 0;
+> }
+> ```
+
+## While Loop
+For `while` loop definition you need use `while`, conditional expression between round brackets and block of statements. For example:
+```C++
+func int main()
+{
+    var int i = 0;
+
+    while (i < 10)
+    {
+        echo i;
+        i += 1;
+    }
+
+    return 0;
+}
+```
+
+> [!TIP]
+> If block of statements in `while` branch have only 1 statement, you don't have to specify braces. For example:
+> ```C++
+> func int main()
+> {
+>     while (true) echo "Hello world! This is infinity cycle!";
+> 
+>     return 0;
+> }
+> ```
+
+## Do/while Loop
+For `do/while` loop definition you need use `do`, block of statements, special operator `->` and conditional expression between round brackets. For example:
+```C++
+func int main()
+{
+    var int i = 0;
+
+    do 
+    {
+        echo i;
+        i += 1;
+    } -> (i < 10);
+
+    return 0;
+}
+```
+
+> [!TIP]
+> If block of statements in `do` branch have only 1 statement, you don't have to specify braces. For example:
+> ```C++
+> func int main()
+> {
+>     do echo "Hello world! This is infinity cycle!"; -> (true);
+> 
+>     return 0;
+> }
+> ```
+
+## For Loop
+For `for` loop definition you need use `for`, define or assign iterator variable, special operator `;`, conditional expression, special operator `;`, and assignment statement for iterator variable between round brackets and block of statements. For example:
+```C++
+func int main()
+{
+    for (int i = 0; i < 10; i += 1)
+    {
+        echo i;
+    }
+
+    var int i = 0;
+    for (i = 10; i > 0; i /= 2)
+    {
+        echo i;
+    }
+
+    return 0;
+}
+```
+
+> [!TIP]
+> If block of statements in `for` branch have only 1 statement, you don't have to specify braces. For example:
+> ```C++
+> func int main()
+> {
+>     for (int i = 0; i < 10; i += 1) echo 1;
 > 
 >     return 0;
 > }

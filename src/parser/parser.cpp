@@ -21,10 +21,15 @@ AST::StmtPtr Parser::parseStmt()
     else if (match(TokenType::IDENTIFIER))
     {
         if (peek().type == TokenType::LPAREN) return parseFuncCallStmt();
-        return parseVarAsgnStmt();
+        return parseVarAsgnStmt(false);
     }
     else if (match(TokenType::RETURN)) return parseReturnStmt();
     else if (match(TokenType::IF)) return parseIfElseStmt();
+    else if (match(TokenType::WHILE)) return parseWhileLoopStmt();
+    else if (match(TokenType::DO)) return parseDoWhileLoopStmt();
+    else if (match(TokenType::FOR)) return parseForLoopStmt();
+    else if (match(TokenType::BREAK)) return parseBreakStmt();
+    else if (match(TokenType::CONTINUE)) return parseContinueStmt();
     else if (match(TokenType::ECHO)) return parseEchoStmt();
     else throw std::runtime_error("Unexpected token: '" + peek().value + "'" + " -> " + std::to_string(peek().line) + ":" + std::to_string(peek().column));
 }
@@ -85,7 +90,7 @@ AST::StmtPtr Parser::parseFuncCallStmt()
     return std::make_unique<AST::FuncCallStmt>(id.value, std::move(args));
 }
 
-AST::StmtPtr Parser::parseVarAsgnStmt()
+AST::StmtPtr Parser::parseVarAsgnStmt(bool fromForLoop)
 {
     Token id = peek(-1);
     AST::ExprPtr expr = nullptr;
@@ -93,7 +98,7 @@ AST::StmtPtr Parser::parseVarAsgnStmt()
     if (match(TokenType::ASSIGN)) expr = parseExpr();
     else expr = createCompoundAssignmentOperator(id);
 
-    consume(TokenType::SEMICOLON, "Expected ';'");
+    if (!fromForLoop) consume(TokenType::SEMICOLON, "Expected ';'");
 
     return std::make_unique<AST::VarAsgnStmt>(id.value, std::move(expr));
 }
@@ -125,6 +130,74 @@ AST::StmtPtr Parser::parseIfElseStmt()
     }
 
     return std::make_unique<AST::IfElseStmt>(std::move(condExpr), std::move(thenBranch), std::move(elseBranch));
+}
+
+AST::StmtPtr Parser::parseWhileLoopStmt()
+{
+    consume(TokenType::LPAREN, "Expected '('");
+    AST::ExprPtr condExpr = parseExpr();
+    consume(TokenType::RPAREN, "Expected ')'");
+
+    AST::Block block;
+    if (!match(TokenType::LBRACE)) block.push_back(parseStmt());
+    else while (!match(TokenType::RBRACE)) block.push_back(parseStmt());
+
+    return std::make_unique<AST::WhileLoopStmt>(std::move(condExpr), std::move(block));
+}
+
+AST::StmtPtr Parser::parseDoWhileLoopStmt()
+{
+    AST::Block block;
+    if (!match(TokenType::LBRACE)) block.push_back(parseStmt());
+    else while (!match(TokenType::RBRACE)) block.push_back(parseStmt());
+
+    consume(TokenType::NEXT, "Expected '->'");
+    
+    consume(TokenType::LPAREN, "Expected '('");
+    AST::ExprPtr condExpr = parseExpr();
+    consume(TokenType::RPAREN, "Expected ')'");
+
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    return std::make_unique<AST::DoWhileLoopStmt>(std::move(condExpr), std::move(block));
+}
+
+AST::StmtPtr Parser::parseForLoopStmt()
+{
+    consume(TokenType::LPAREN, "Expected '('");
+
+    AST::StmtPtr iterator;
+    if (match(TokenType::IDENTIFIER)) iterator = parseVarAsgnStmt(false);
+    else iterator = parseVarDeclStmt();
+
+    AST::ExprPtr condExpr = parseExpr();
+
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    pos++;  // skip identifier;
+    AST::StmtPtr iterationStmt = parseVarAsgnStmt(true);
+
+    consume(TokenType::RPAREN, "Expected ')'");
+
+    AST::Block block;
+    if (!match(TokenType::LBRACE)) block.push_back(parseStmt());
+    else while (!match(TokenType::RBRACE)) block.push_back(parseStmt());
+
+    return std::make_unique<AST::ForLoopStmt>(std::move(iterator), std::move(condExpr), std::move(iterationStmt), std::move(block));
+}
+
+AST::StmtPtr Parser::parseBreakStmt()
+{
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    return std::make_unique<AST::BreakStmt>();
+}
+
+AST::StmtPtr Parser::parseContinueStmt()
+{
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    return std::make_unique<AST::ContinueStmt>();
 }
 
 AST::StmtPtr Parser::parseEchoStmt()

@@ -94,6 +94,11 @@ void CodeGenerator::generateStmt(const AST::Stmt& stmt)
     else if (auto fcs = dynamic_cast<const AST::FuncCallStmt*>(&stmt)) generateFuncCallStmt(*fcs);
     else if (auto rs = dynamic_cast<const AST::ReturnStmt*>(&stmt)) generateReturnStmt(*rs);
     else if (auto ies = dynamic_cast<const AST::IfElseStmt*>(&stmt)) generateIfElseStmt(*ies);
+    else if (auto wls = dynamic_cast<const AST::WhileLoopStmt*>(&stmt)) generateWhileLoopStmt(*wls);
+    else if (auto dwls = dynamic_cast<const AST::DoWhileLoopStmt*>(&stmt)) generateDoWhileLoopStmt(*dwls);
+    else if (auto fls = dynamic_cast<const AST::ForLoopStmt*>(&stmt)) generateForLoopStmt(*fls);
+    else if (dynamic_cast<const AST::BreakStmt*>(&stmt)) generateBreakStmt();
+    else if (dynamic_cast<const AST::ContinueStmt*>(&stmt)) generateContinueStmt();
     else if (auto es = dynamic_cast<const AST::EchoStmt*>(&stmt)) generateEchoStmt(*es);
 }
 
@@ -235,6 +240,131 @@ void CodeGenerator::generateIfElseStmt(const AST::IfElseStmt& stmt)
     popScope();
     
     builder.SetInsertPoint(mergeBB);
+}
+
+void CodeGenerator::generateWhileLoopStmt(const AST::WhileLoopStmt& stmt)
+{
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+
+    llvm::BasicBlock* condBlock = llvm::BasicBlock::Create(context, "while.cond", function);
+    llvm::BasicBlock* bodyBlock = llvm::BasicBlock::Create(context, "while.body", function);
+    llvm::BasicBlock* exitBlock = llvm::BasicBlock::Create(context, "while.end", function);
+
+    builder.CreateBr(condBlock);
+
+    builder.SetInsertPoint(condBlock);
+    llvm::Value* cond = generateExpr(*stmt.condExpr);
+    if (!cond->getType()->isIntegerTy(1))
+    {
+        if (cond->getType()->isIntegerTy()) cond = builder.CreateICmpNE(cond, llvm::ConstantInt::get(cond->getType(), 0), "whilecond");
+        else if (cond->getType()->isFloatTy() || cond->getType()->isDoubleTy()) cond = builder.CreateFCmpONE(cond, llvm::ConstantFP::get(cond->getType(), 0.0), "whilecond");
+        else throw std::runtime_error("Invalid condition type in while loop");
+    }
+    builder.CreateCondBr(cond, bodyBlock, exitBlock);
+
+    builder.SetInsertPoint(bodyBlock);
+    loopBlocks.emplace(exitBlock, condBlock);
+    pushScope();
+    for (const auto& s : stmt.block) generateStmt(*s);
+    if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(condBlock);
+    popScope();
+    loopBlocks.pop();
+
+    builder.SetInsertPoint(exitBlock);
+}
+
+void CodeGenerator::generateDoWhileLoopStmt(const AST::DoWhileLoopStmt& stmt)
+{
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+
+    llvm::BasicBlock* bodyBlock = llvm::BasicBlock::Create(context, "dowhile.body", function);
+    llvm::BasicBlock* condBlock = llvm::BasicBlock::Create(context, "dowhile.cond", function);
+    llvm::BasicBlock* exitBlock = llvm::BasicBlock::Create(context, "dowhile.end", function);
+
+    builder.CreateBr(bodyBlock);
+
+    builder.SetInsertPoint(bodyBlock);
+    loopBlocks.emplace(exitBlock, condBlock);
+    pushScope();
+    for (const auto& s : stmt.block) generateStmt(*s);
+    if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(condBlock);
+    popScope();
+    loopBlocks.pop();
+
+    builder.SetInsertPoint(condBlock);
+    llvm::Value* cond = generateExpr(*stmt.condExpr);
+    if (!cond->getType()->isIntegerTy(1))
+    {
+        if (cond->getType()->isIntegerTy()) cond = builder.CreateICmpNE(cond, llvm::ConstantInt::get(cond->getType(), 0), "dowhilecond");
+        else if (cond->getType()->isFloatTy() || cond->getType()->isDoubleTy()) cond = builder.CreateFCmpONE(cond, llvm::ConstantFP::get(cond->getType(), 0.0), "dowhilecond");
+        else throw std::runtime_error("Invalid condition type in do-while loop");
+    }
+    builder.CreateCondBr(cond, bodyBlock, exitBlock);
+
+    builder.SetInsertPoint(exitBlock);
+}
+
+void CodeGenerator::generateForLoopStmt(const AST::ForLoopStmt& stmt)
+{
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+
+    llvm::BasicBlock* iteratorBlock = llvm::BasicBlock::Create(context, "for.init", function);
+    llvm::BasicBlock* condBlock = llvm::BasicBlock::Create(context, "for.cond", function);
+    llvm::BasicBlock* iterationBlock = llvm::BasicBlock::Create(context, "for.incr", function);
+    llvm::BasicBlock* bodyBlock = llvm::BasicBlock::Create(context, "for.body", function);
+    llvm::BasicBlock* exitBlock = llvm::BasicBlock::Create(context, "for.end", function);
+
+    builder.CreateBr(iteratorBlock);
+
+    builder.SetInsertPoint(iteratorBlock);
+    if (stmt.iterator) generateStmt(*stmt.iterator);
+    builder.CreateBr(condBlock);
+
+    builder.SetInsertPoint(condBlock);
+    llvm::Value* cond = nullptr;
+    if (stmt.condExpr)
+    {
+        cond = generateExpr(*stmt.condExpr);
+        if (!cond->getType()->isIntegerTy(1))
+        {
+            if (cond->getType()->isIntegerTy()) cond = builder.CreateICmpNE(cond, llvm::ConstantInt::get(cond->getType(), 0), "forcond");
+            else if (cond->getType()->isFloatTy() || cond->getType()->isDoubleTy()) cond = builder.CreateFCmpONE(cond, llvm::ConstantFP::get(cond->getType(), 0.0), "forcond");
+            else throw std::runtime_error("Invalid condition type in for loop");
+        }
+    }
+    else cond = llvm::ConstantInt::getTrue(context);
+
+    builder.CreateCondBr(cond, bodyBlock, exitBlock);
+
+    builder.SetInsertPoint(bodyBlock);
+    loopBlocks.emplace(exitBlock, iterationBlock);
+    pushScope();
+    for (const auto& s : stmt.block) generateStmt(*s);
+    if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(iterationBlock);
+    popScope();
+    loopBlocks.pop();
+
+    builder.SetInsertPoint(iterationBlock);
+    if (stmt.iterationStmt) generateStmt(*stmt.iterationStmt);
+    builder.CreateBr(condBlock);
+
+    builder.SetInsertPoint(exitBlock);
+}
+
+void CodeGenerator::generateBreakStmt()
+{
+    if (loopBlocks.empty()) throw std::runtime_error("break not within loop");
+    
+    llvm::BasicBlock* exitBlock = loopBlocks.top().first;
+    builder.CreateBr(exitBlock);
+}
+
+void CodeGenerator::generateContinueStmt()
+{
+    if (loopBlocks.empty()) throw std::runtime_error("continue not within loop");
+
+    llvm::BasicBlock* condBlock = loopBlocks.top().second;
+    builder.CreateBr(condBlock);
 }
 
 void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
