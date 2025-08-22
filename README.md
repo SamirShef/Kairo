@@ -1,7 +1,7 @@
 # StageLang
 **Stage** - multi-paradigm programming language
 
-Compiler version: **v0.1** – C++ &amp; LLVM
+Compiler version: **v0.2** – C++ &amp; LLVM
 
 ## Installation (Linux)
 
@@ -136,12 +136,43 @@ Type rules (summary):
 - Logical operators require `bool` operands and produce `bool`.
 - Assignment (incl. compound) requires the right-hand side to be implicitly castable to the variable type.
 
+## Operators
+The language supports the following operators. All binary operators are left-associative. Operator precedence (from highest to lowest) follows the order listed below within each group (top binds tighter):
+
+- Arithmetic:
+  - Unary: `-x`
+  - Multiplicative: `x * y`, `x / y`, `x % y`
+  - Additive: `x + y`, `x - y`
+
+- Comparisons (result type: `bool`):
+  - `x == y`, `x != y`
+  - `x > y`, `x >= y`, `x < y`, `x <= y`
+
+- Logical (operands must be `bool`):
+  - Unary: `!x`
+  - Binary: `x || y`, `x && y`
+  - Note: in this version, `||` binds tighter than `&&` (i.e., `a && b || c` is parsed as `a && (b || c)`). Use parentheses to make intent explicit.
+
+- Assignment:
+  - Simple: `x = expr;`
+  - Compound: `x += expr;`, `x -= expr;`, `x *= expr;`, `x /= expr;`, `x %= expr;`
+
+- Grouping and calls:
+  - Grouping: `(expr)`
+  - Function call: `name(arg1, arg2, ...)`
+
+Type rules (summary):
+- Arithmetic operators work on numeric types; implicit widening casts are allowed (`int -> float -> double`).
+- Comparisons allow numeric comparisons and produce `bool`.
+- Logical operators require `bool` operands and produce `bool`.
+- Assignment (incl. compound) requires the right-hand side to be implicitly castable to the variable type.
+
 ## Syntax
 List of statements:
 * [Global variables definition](#global-variables-definition)
 * [Function definition](#function-definition)
 * [Local variables definition](#local-variables-definition)
-* [If/Else statements](#if-else-statements)
+* [If/Else statements](#ifelse-statements)
 * [Echo](#echo-statement)
 
 > [!NOTE]
@@ -195,6 +226,9 @@ func void test()
 > A function named `main` is the entry point to the project. If you forgot to create a definition for this function, the compiler will not compile your code into an executable file. The type of this function can be any.
 
 ## Local Variables Definition
+<<<<<<< HEAD
+Local variables definition like global, but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted.
+=======
 Local variables definition like global, but you can initialized but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted. For example:
 ```C++
 func int main()
@@ -244,10 +278,12 @@ func int main()
 >     return 0;
 > }
 > ```
+>>>>>>> 359e1e3 (Add if/else statements)
 
 ## Echo Statement
 Echo statement can write any value in console. For use echo you need use keyword `echo` and some expression. For example:
 ```C++
+func int main()
 func int main()
 {
     echo "Hello world!";
