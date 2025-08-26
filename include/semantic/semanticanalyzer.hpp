@@ -11,16 +11,29 @@ public:
     void analyze(const std::vector<AST::StmtPtr>&);
 
 private:
-    std::stack<std::map<std::string, TypeValue>> variables;
-    std::stack<TypeValue> functionReturnTypes;
+    std::stack<std::map<std::string, Type>> variables;
+    std::stack<Type> variablesTypes;
+    
     int loopDepth = 0;
-
+    
     struct FunctionInfo
     {
-        TypeValue returnType;
+        Type returnType;
         AST::Arguments args;
+
+        FunctionInfo() = default;
     };
     std::map<std::string, FunctionInfo> functions;
+    std::stack<Type> functionReturnTypes;
+
+    struct ClassInfo
+    {
+        std::vector<std::unique_ptr<AST::FieldMember>> fields;
+        std::vector<std::unique_ptr<AST::MethodMember>> methods;
+    };
+    std::map<std::string, ClassInfo> classes;
+    std::stack<std::string> classesStack;
+    
     std::map<TypeValue, std::vector<TypeValue>> castsTable =
     {
         { TypeValue::INT, { TypeValue::FLOAT, TypeValue::DOUBLE } },
@@ -40,15 +53,19 @@ private:
     void analyzeBreakStmt();
     void analyzeContinueStmt();
     void analyzeEchoStmt(AST::EchoStmt&);
+    void analyzeClassDeclStmt(AST::ClassDeclStmt&);
+    void analyzeFieldMember(std::vector<std::unique_ptr<AST::FieldMember>>& members, AST::FieldMember&);
+    void analyzeMethodMember(std::string, std::vector<std::unique_ptr<AST::MethodMember>>& members, AST::MethodMember&);
 
-    TypeValue analyzeExpr(const AST::Expr&);
-    TypeValue analyzeBinaryExpr(const AST::BinaryExpr&);
-    TypeValue analyzeUnaryExpr(const AST::UnaryExpr&);
-    TypeValue analyzeLiteral(const AST::Literal&);
-    TypeValue analizeVarExpr(const AST::VarExpr&);
-    TypeValue analyzeFuncCallExpr(const AST::FuncCallExpr&);
+    Type analyzeExpr(const AST::Expr&);
+    Type analyzeBinaryExpr(const AST::BinaryExpr&);
+    Type analyzeUnaryExpr(const AST::UnaryExpr&);
+    Type analyzeLiteral(const AST::Literal&);
+    Type analizeVarExpr(const AST::VarExpr&);
+    Type analyzeFuncCallExpr(const AST::FuncCallExpr&);
+    Type analyzeNewExpr(const AST::NewExpr&);
 
-    bool canImplicitlyCast(TypeValue, TypeValue);
+    bool canImplicitlyCast(Type, Type);
 
     bool isConstExpr(const AST::Expr&) const;
 };

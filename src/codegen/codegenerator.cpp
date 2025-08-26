@@ -16,6 +16,11 @@
 CodeGenerator::CodeGenerator(const std::string& moduleName) : context(), builder(context), module(std::make_unique<llvm::Module>(moduleName, context))
 {
     scopeStack.emplace(std::map<std::string, llvm::Value*>{});
+
+    auto ptrTy = llvm::Type::getInt8Ty(context);
+    auto sizeTy = llvm::Type::getInt64Ty(context);
+    auto mallocTy = llvm::FunctionType::get(ptrTy, {sizeTy}, false);
+    module->getOrInsertFunction("malloc", mallocTy);
 }
 
 void CodeGenerator::pushScope()
@@ -38,7 +43,8 @@ void CodeGenerator::setNamedValue(const std::string& name, llvm::Value* value)
 llvm::Value* CodeGenerator::getNamedValue(const std::string& name) const
 {
     auto copy = scopeStack;
-    while (!copy.empty()) {
+    while (!copy.empty())
+    {
         const auto& scope = copy.top();
         auto it = scope.find(name);
         if (it != scope.end()) return it->second;
@@ -47,15 +53,24 @@ llvm::Value* CodeGenerator::getNamedValue(const std::string& name) const
     return nullptr;
 }
 
-llvm::Type* CodeGenerator::getLLVMType(TypeValue type)
+llvm::Type* CodeGenerator::getLLVMType(Type type)
 {
-    switch(type) {
+    switch(type.type)
+    {
         case TypeValue::INT: return llvm::Type::getInt32Ty(context);
         case TypeValue::FLOAT: return llvm::Type::getFloatTy(context);
         case TypeValue::DOUBLE: return llvm::Type::getDoubleTy(context);
         case TypeValue::CHAR: return llvm::Type::getInt8Ty(context);
         case TypeValue::BOOL: return llvm::Type::getInt1Ty(context);
         case TypeValue::VOID: return llvm::Type::getVoidTy(context);
+        case TypeValue::CLASS:
+        {
+            auto it = classes.find(type.name);
+            if (it == classes.end()) throw std::runtime_error("Class not found: " + type.name);
+            if (!it->second.type) throw std::runtime_error("Class type is null for: " + type.name);
+
+            return llvm::PointerType::get(it->second.type, 0);
+        }
         default: throw std::runtime_error("Unknown type in getLLVMType");
     }
 }
@@ -100,12 +115,13 @@ void CodeGenerator::generateStmt(const AST::Stmt& stmt)
     else if (dynamic_cast<const AST::BreakStmt*>(&stmt)) generateBreakStmt();
     else if (dynamic_cast<const AST::ContinueStmt*>(&stmt)) generateContinueStmt();
     else if (auto es = dynamic_cast<const AST::EchoStmt*>(&stmt)) generateEchoStmt(*es);
+    else if (auto cds = dynamic_cast<const AST::ClassDeclStmt*>(&stmt)) generateClassDeclStmt(*cds);
 }
 
 void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
 {
     llvm::Value* initValue = generateExpr(*stmt.expr);
-    
+
     if (builder.GetInsertBlock() == nullptr)
     {
         llvm::Constant* constantInit = llvm::dyn_cast<llvm::Constant>(initValue);
@@ -116,9 +132,8 @@ void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
         setNamedValue(stmt.name, gv);
         return;
     }
-
+    
     llvm::AllocaInst* alloca = builder.CreateAlloca(getLLVMType(stmt.type), nullptr, stmt.name + ".addr");
-
     builder.CreateStore(initValue, alloca);
     setNamedValue(stmt.name, alloca);
 }
@@ -153,16 +168,16 @@ void CodeGenerator::generateFuncDeclStmt(const AST::FuncDeclStmt& stmt)
     
     pushScope();
 
-    for (llvm::Argument& arg : func->args())
+    auto argIt = func->arg_begin();
+    for (size_t i = 0; i < stmt.args.size() && argIt != func->arg_end(); ++i, ++argIt)
     {
-        const std::string& argName = stmt.args[arg.getArgNo()].name;
-        arg.setName(argName);
+        llvm::Argument& arg = *argIt;
+        arg.setName(stmt.args[i].name);
         
-        llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, argName + ".addr");
+        llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, stmt.args[i].name + ".addr");
         
         builder.CreateStore(&arg, alloca);
-        
-        setNamedValue(argName, alloca);
+        setNamedValue(stmt.args[i].name, alloca);
     }
 
     for (const auto& stmt : stmt.block) generateStmt(*stmt);
@@ -417,6 +432,74 @@ void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
     builder.CreateCall(printfFunc, { format, promoted });
 }
 
+void CodeGenerator::generateClassDeclStmt(const AST::ClassDeclStmt& stmt)
+{
+    classesStack.push(stmt.name);
+    
+    std::vector<llvm::Type*> fieldTypes;
+    ClassInfo classInfo;
+    int fieldIndex = 0;
+
+    for (const auto& member : stmt.members)
+    {
+        if (auto field = dynamic_cast<AST::FieldMember*>(member.get()))
+        {
+            fieldTypes.push_back(getLLVMType(field->type));
+            classInfo.fieldIndices[field->name] = fieldIndex++;
+        }
+    }
+
+    classInfo.type = llvm::StructType::create(context, fieldTypes, stmt.name);
+    classes[stmt.name] = classInfo;
+
+    for (const auto& member : stmt.members)
+        if (auto method = dynamic_cast<AST::MethodMember*>(member.get())) generateMethodDeclStmt(*method);
+
+    classesStack.pop();
+}
+
+void CodeGenerator::generateMethodDeclStmt(const AST::MethodMember& stmt)
+{
+    std::vector<llvm::Type*> argTypes;
+    
+    argTypes.push_back(llvm::PointerType::get(classes[classesStack.top()].type, 0));
+    
+    for (const auto& arg : stmt.args) argTypes.push_back(getLLVMType(arg.type));
+
+    llvm::FunctionType* funcType = llvm::FunctionType::get(getLLVMType(stmt.retType), argTypes, false);
+
+    llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, classesStack.top() + "_" + stmt.name, *module);
+
+    classes[classesStack.top()].methods[stmt.name] = func;
+
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", func);
+    builder.SetInsertPoint(entry);
+
+    pushScope();
+    
+    llvm::Argument* thisArg = &func->arg_begin()[0];
+    thisArg->setName("this");
+    setNamedValue("this", thisArg);
+
+    auto argIt = func->arg_begin();
+    std::advance(argIt, 1);
+
+    for (size_t i = 0; i < stmt.args.size() && argIt != func->arg_end(); ++i, ++argIt)
+    {
+        llvm::Argument& arg = *argIt;
+        arg.setName(stmt.args[i].name);
+        
+        llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, stmt.args[i].name + ".addr");
+        
+        builder.CreateStore(&arg, alloca);
+        setNamedValue(stmt.args[i].name, alloca);
+    }
+
+    for (const auto& stmt : stmt.block) generateStmt(*stmt);
+
+    popScope();
+}
+
 llvm::Value* CodeGenerator::generateExpr(const AST::Expr& expr)
 {
     if (auto lit = dynamic_cast<const AST::Literal*>(&expr)) return generateLiteral(*lit);
@@ -424,6 +507,7 @@ llvm::Value* CodeGenerator::generateExpr(const AST::Expr& expr)
     else if (auto unary = dynamic_cast<const AST::UnaryExpr*>(&expr)) return generateUnaryExpr(*unary);
     else if (auto var = dynamic_cast<const AST::VarExpr*>(&expr)) return generateVarExpr(*var);
     else if (auto func = dynamic_cast<const AST::FuncCallExpr*>(&expr)) return generateFuncCallExpr(*func);
+    else if (auto n = dynamic_cast<const AST::NewExpr*>(&expr)) return generateNewExpr(*n);
 
     throw std::runtime_error("Unknown expression type in generateExpr");
 }
@@ -432,7 +516,8 @@ llvm::Value* CodeGenerator::generateLiteral(const AST::Literal& literal)
 {
     const auto& value = literal.value.value;
     
-    switch(literal.type) {
+    switch (literal.type.type)
+    {
         case TypeValue::INT: return llvm::ConstantInt::get(context, llvm::APInt(32, std::get<int>(value), true));
         case TypeValue::FLOAT: return llvm::ConstantFP::get(context, llvm::APFloat(std::get<float>(value)));
         case TypeValue::DOUBLE: return llvm::ConstantFP::get(context, llvm::APFloat(std::get<double>(value)));
@@ -452,7 +537,8 @@ llvm::Value* CodeGenerator::generateBinaryExpr(const AST::BinaryExpr& binaryExpr
     llvm::Value* left = generateExpr(*binaryExpr.left);
     llvm::Value* right = generateExpr(*binaryExpr.right);
     
-    switch(binaryExpr.op) {
+    switch (binaryExpr.op)
+    {
         case TokenType::PLUS: 
             if (left->getType()->isIntegerTy()) return builder.CreateAdd(left, right, "addtmp");
             else return builder.CreateFAdd(left, right, "addtmp");
@@ -495,7 +581,8 @@ llvm::Value* CodeGenerator::generateUnaryExpr(const AST::UnaryExpr& unaryExpr)
 {
     llvm::Value* operand = generateExpr(*unaryExpr.expr);
     
-    switch(unaryExpr.op) {
+    switch (unaryExpr.op)
+    {
         case TokenType::MINUS:
             if (operand->getType()->isIntegerTy()) return builder.CreateNeg(operand, "negtmp");
             else return builder.CreateFNeg(operand, "negtmp");
@@ -536,6 +623,51 @@ llvm::Value* CodeGenerator::generateFuncCallExpr(const AST::FuncCallExpr& funcEx
     if (callee->getReturnType()->isVoidTy()) return nullptr;
     
     return call;
+}
+
+llvm::Value* CodeGenerator::generateNewExpr(const AST::NewExpr& expr)
+{
+    auto it = classes.find(expr.name);    
+    ClassInfo& classInfo = it->second;
+    if (!classInfo.type) throw std::runtime_error("Class type is null for '" + expr.name + "'");
+    
+    llvm::Value* size = llvm::ConstantExpr::getSizeOf(classInfo.type);
+
+    llvm::Function* mallocFunc = module->getFunction("malloc");
+    if (!mallocFunc) {
+        throw std::runtime_error("Failed to declare malloc");
+    }
+    
+    llvm::Value* allocated = builder.CreateCall(mallocFunc, size, "new");
+    
+    llvm::Type* targetType = llvm::PointerType::get(classInfo.type, 0);
+    return builder.CreateBitCast(allocated, targetType);
+}
+
+/* llvm::Value* CodeGenerator::generateFieldAccessExpr(const AST::FieldAccessExpr& expr)
+{
+    llvm::Value* object = generateExpr(*expr.object);
+    ClassInfo& classInfo = classes[];
+    int fieldIndex = classInfo.fieldIndices[expr.name];
+    return builder.CreateStructGEP(classInfo.type, object, fieldIndex);
+}
+
+llvm::Value* CodeGenerator::generateMethodCallExpr(const AST::MethodCallExpr& expr)
+{
+    llvm::Value* object = generateExpr(*expr.object);
+    std::string className = ;
+    llvm::Function* method = classes[className].methods[expr.name];
+    
+    std::vector<llvm::Value*> args;
+    args.push_back(object);
+    for (const auto& arg : expr.args) args.push_back(generateExpr(*arg));
+    
+    return builder.CreateCall(method, args);
+} */
+
+llvm::Value* CodeGenerator::generateThisExpr(const AST::ThisExpr&)
+{
+    return getNamedValue("this");
 }
 
 void CodeGenerator::printIR() const

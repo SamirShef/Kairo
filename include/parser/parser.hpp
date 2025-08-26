@@ -7,10 +7,7 @@
 class Parser
 {
 public:
-    Parser(std::vector<Token> t) : tokens(t)
-    {
-        pos = 0;
-    }
+    Parser(std::vector<Token> t) : tokens(t) { pos = 0; }
 
     std::vector<AST::StmtPtr> parse();
 
@@ -30,6 +27,9 @@ private:
     AST::StmtPtr parseForLoopStmt();
     AST::StmtPtr parseBreakStmt();
     AST::StmtPtr parseContinueStmt();
+    AST::StmtPtr parseClassDeclStmt();
+    std::unique_ptr<AST::Member> parseFieldDecl(AST::AccessModifier&);
+    std::unique_ptr<AST::Member> parseMethodDecl(AST::AccessModifier&);
     AST::StmtPtr parseEchoStmt();
 
     AST::ExprPtr createCompoundAssignmentOperator(Token&);
@@ -42,12 +42,16 @@ private:
     AST::ExprPtr parseAdditive();
     AST::ExprPtr parseUnary();
     AST::ExprPtr parsePrimary();
-
-    TypeValue consumeType();
+    AST::ExprPtr parseNewExpr();
+    AST::ExprPtr parseFieldAccess();
+    AST::ExprPtr parseMethodCall();
+    AST::ExprPtr parseThisExpr();
+    
+    Type consumeType();
 
     Token peek();
     Token peek(int);
-    Token consume(TokenType, std::string);
+    Token consume(TokenType, const std::string&);
 
     bool match(TokenType);
 };

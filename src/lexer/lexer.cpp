@@ -26,6 +26,11 @@ Lexer::Lexer(const std::string initSource)
     keywords["for"] = TokenType::FOR;
     keywords["break"] = TokenType::BREAK;
     keywords["continue"] = TokenType::CONTINUE;
+    keywords["class"] = TokenType::CLASS;
+    keywords["pub"] = TokenType::PUBLIC;
+    keywords["priv"] = TokenType::PRIVATE;
+    keywords["new"] = TokenType::NEW;
+    keywords["this"] = TokenType::THIS;
     keywords["echo"] = TokenType::ECHO;
 }
 

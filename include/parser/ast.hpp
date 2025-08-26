@@ -31,14 +31,15 @@ namespace AST
     class Argument
     {
     public:
-        TypeValue type;
+        Type type;
         std::string name;
 
-        Argument(TypeValue t, std::string n) : type(t), name(n) {}
+        Argument() = default;
+        Argument(Type t, std::string n) : type(t), name(n) {}
 
         bool operator==(const Argument& other) const
         {
-            return type == other.type && name == other.name;
+            return type.type == other.type.type && type.name == other.type.name && name == other.name;
         }
         
         bool operator!=(const Argument& other) const
@@ -50,27 +51,60 @@ namespace AST
     using Arguments = std::vector<Argument>;
     using Block = std::vector<StmtPtr>;
 
-    class Function
+    enum class AccessModifier
+    {
+        PUBLIC, PRIVATE
+    };
+
+    class Member
     {
     public:
+        AccessModifier access;
+        std::string name;
+
+        Member(AccessModifier am, std::string n) : access(am), name(n) {}
+
+        virtual ~Member() = default;
+    };
+    
+    class FieldMember : public Member
+    {
+    public:
+        Type type;
+        ExprPtr expr;
+
+        FieldMember(AccessModifier am, std::string n, Type t, ExprPtr e) : Member(am, n), type(t), expr(std::move(e)) {}
+        
+        ~FieldMember() override = default;
+    };
+
+    class MethodMember : public Member
+    {
+    public:
+        Type retType;
         Arguments args;
         Block block;
 
-        Function() = default;
-        Function(Arguments a, Block b) : args(std::move(a)), block(std::move(b)) {}
-        Function(const Function&) = delete;
-        Function(Function&&) = default;
-        ~Function() = default;
+        MethodMember(AccessModifier am, std::string n, Type rt, Arguments a, Block b) : Member(am, n), retType(rt), args(std::move(a)), block(std::move(b)) {}
+        
+        ~MethodMember() override = default;
+    };
+
+    struct ClassInstance
+    {
+        std::string name;
+        std::vector<FieldMember> fields;
+        std::vector<MethodMember> methods;
     };
     
     class VarDeclStmt : public Stmt
     {
     public:
         std::string name;
-        TypeValue type;
+        Type type;
         ExprPtr expr;
 
-        VarDeclStmt(std::string n, TypeValue t, ExprPtr e) : name(n), type(t), expr(std::move(e)) {}
+        VarDeclStmt(std::string n, Type t, ExprPtr e) : name(n), type(t), expr(std::move(e)) {}
 
         ~VarDeclStmt() override = default;
     };
@@ -90,11 +124,11 @@ namespace AST
     {
     public:
         std::string name;
-        TypeValue retType;
+        Type retType;
         Arguments args;
         Block block;
 
-        FuncDeclStmt(std::string n, TypeValue rt, Arguments a, Block b) : name(n), retType(rt), args(std::move(a)), block(std::move(b)) {}
+        FuncDeclStmt(std::string n, Type rt, Arguments a, Block b) : name(n), retType(rt), args(std::move(a)), block(std::move(b)) {}
 
         ~FuncDeclStmt() override = default;
     };
@@ -189,13 +223,24 @@ public:
         ~EchoStmt() override = default;
     };
 
+    class ClassDeclStmt : public Stmt
+    {
+    public:
+        std::string name;
+        std::vector<std::unique_ptr<Member>> members;
+
+        ClassDeclStmt(std::string n, std::vector<std::unique_ptr<Member>> m) : name(n), members(std::move(m)) {}
+
+        ~ClassDeclStmt() override = default;
+    };
+
     class Literal : public Expr
     {
     public:
         Value value;
-        TypeValue type;
+        Type type;
 
-        Literal(Value v, TypeValue t) : value(v), type(t) {}
+        Literal(Value v, Type t) : value(v), type(t) {}
 
         virtual ~Literal() = default;
     };
@@ -203,7 +248,7 @@ public:
     class IntLiteral : public Literal
     {
     public:
-        IntLiteral(int v) : Literal(Value(v), TypeValue::INT) {}
+        IntLiteral(int v) : Literal(Value(v), Type(TypeValue::INT, "int")) {}
 
         ~IntLiteral() override = default;
     };
@@ -211,7 +256,7 @@ public:
     class FloatLiteral : public Literal
     {
     public:
-        FloatLiteral(float v) : Literal(Value(v), TypeValue::FLOAT) {}
+        FloatLiteral(float v) : Literal(Value(v), Type(TypeValue::FLOAT, "float")) {}
 
         ~FloatLiteral() override = default;
     };
@@ -219,7 +264,7 @@ public:
     class DoubleLiteral : public Literal
     {
     public:
-        DoubleLiteral(double v) : Literal(Value(v), TypeValue::DOUBLE) {}
+        DoubleLiteral(double v) : Literal(Value(v), Type(TypeValue::DOUBLE, "double")) {}
 
         ~DoubleLiteral() override = default;
     };
@@ -227,7 +272,7 @@ public:
     class CharLiteral : public Literal
     {
     public:
-        CharLiteral(char v) : Literal(Value(v), TypeValue::CHAR) {}
+        CharLiteral(char v) : Literal(Value(v), Type(TypeValue::CHAR, "char")) {}
         
         ~CharLiteral() override = default;
     };
@@ -235,7 +280,7 @@ public:
     class BoolLiteral : public Literal
     {
     public:
-        BoolLiteral(bool v) : Literal(Value(v), TypeValue::BOOL) {}
+        BoolLiteral(bool v) : Literal(Value(v), Type(TypeValue::BOOL, "bool")) {}
 
         ~BoolLiteral() override = default;
     };
@@ -243,7 +288,7 @@ public:
     class StringLiteral : public Literal
     {
     public:
-        StringLiteral(std::string v) : Literal(Value(v), TypeValue::STRING) {}
+        StringLiteral(std::string v) : Literal(Value(v), Type(TypeValue::STRING, "string")) {}
 
         ~StringLiteral() override = default;
     };
@@ -290,5 +335,46 @@ public:
         FuncCallExpr(std::string n, std::vector<ExprPtr> a) : name(n), args(std::move(a)) {}
 
         ~FuncCallExpr() override = default;
+    };
+
+    class NewExpr : public Expr
+    {
+    public:
+        std::string name;
+        std::vector<ExprPtr> args;
+
+        NewExpr(std::string n, std::vector<ExprPtr> a) : name(n), args(std::move(a)) {}
+
+        ~NewExpr() override = default;
+    };
+
+    class FieldAccessExpr : public Expr
+    {
+    public:
+        ExprPtr object;
+        std::string name;
+
+        FieldAccessExpr(ExprPtr obj, std::string n) : object(std::move(obj)), name(n) {}
+
+        ~FieldAccessExpr() override = default;
+    };
+
+    class MethodCallExpr : public Expr
+    {
+    public:
+        ExprPtr object;
+        std::string name;
+        std::vector<ExprPtr> args;
+
+        MethodCallExpr(ExprPtr obj, std::string n, std::vector<ExprPtr> a) : object(std::move(obj)), name(n), args(std::move(a)) {}
+
+        ~MethodCallExpr() override = default;
+    };
+
+    class ThisExpr : public Expr
+    {
+    public:
+        ThisExpr() = default;
+        ~ThisExpr() override = default;
     };
 }

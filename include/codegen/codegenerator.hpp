@@ -17,7 +17,16 @@ private:
     std::stack<std::map<std::string, llvm::Value*>> scopeStack;
     std::stack<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> loopBlocks;
 
-    llvm::Type* getLLVMType(TypeValue);
+    struct ClassInfo
+    {
+        llvm::StructType* type;
+        std::map<std::string, int> fieldIndices;
+        std::map<std::string, llvm::Function*> methods;
+    };
+    std::map<std::string, ClassInfo> classes;
+    std::stack<std::string> classesStack;
+
+    llvm::Type* getLLVMType(Type);
     llvm::Value* castToExpectedIfNeeded(llvm::Value* value, llvm::Type* expectedType);
     
     void pushScope();
@@ -38,6 +47,9 @@ private:
     void generateBreakStmt();
     void generateContinueStmt();
     void generateEchoStmt(const AST::EchoStmt&);
+    void generateClassDeclStmt(const AST::ClassDeclStmt&);
+    void generateFieldDeclStmt(const AST::FieldMember&);
+    void generateMethodDeclStmt(const AST::MethodMember&);
 
     llvm::Value* generateExpr(const AST::Expr&);
     llvm::Value* generateLiteral(const AST::Literal&);
@@ -45,6 +57,10 @@ private:
     llvm::Value* generateUnaryExpr(const AST::UnaryExpr&);
     llvm::Value* generateVarExpr(const AST::VarExpr&);
     llvm::Value* generateFuncCallExpr(const AST::FuncCallExpr&);
+    llvm::Value* generateNewExpr(const AST::NewExpr&);
+    llvm::Value* generateFieldAccessExpr(const AST::FieldAccessExpr&);
+    llvm::Value* generateMethodCallExpr(const AST::MethodCallExpr&);
+    llvm::Value* generateThisExpr(const AST::ThisExpr&);
 
 public:
     CodeGenerator(const std::string&);
