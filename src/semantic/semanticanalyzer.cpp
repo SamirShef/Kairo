@@ -1,10 +1,7 @@
 #include "../../include/semantic/semanticanalyzer.hpp"
-#include <algorithm>
 #include <llvm/IR/Type.h>
 #include <memory>
 #include <stdexcept>
-#include <string>
-#include <vector>
 
 std::string typeToString(Type);
 
@@ -18,7 +15,10 @@ void SemanticAnalyzer::analyzeStmt(AST::Stmt& stmt)
 {
     if (auto vds = dynamic_cast<AST::VarDeclStmt*>(&stmt)) analyzeVarDeclStmt(*vds);
     else if (auto vas = dynamic_cast<AST::VarAsgnStmt*>(&stmt)) analyzeVarAsgnStmt(*vas);
+    else if (auto fas = dynamic_cast<AST::FieldAsgnStmt*>(&stmt)) analyzeFieldAsgnStmt(*fas);
     else if (auto fds = dynamic_cast<AST::FuncDeclStmt*>(&stmt)) analyzeFuncDeclStmt(*fds);
+    else if (auto fcs = dynamic_cast<AST::FuncCallStmt*>(&stmt)) analyzeFuncCallStmt(*fcs);
+    else if (auto mcs = dynamic_cast<AST::MethodCallStmt*>(&stmt)) analyzeMethodCallStmt(*mcs);
     else if (auto rs = dynamic_cast<AST::ReturnStmt*>(&stmt)) analyzeReturnStmt(*rs);
     else if (auto ies = dynamic_cast<AST::IfElseStmt*>(&stmt)) analyzeIfElseStmt(*ies);
     else if (auto wls = dynamic_cast<AST::WhileLoopStmt*>(&stmt)) analyzeWhileLoopStmt(*wls);
@@ -32,15 +32,21 @@ void SemanticAnalyzer::analyzeStmt(AST::Stmt& stmt)
 
 void SemanticAnalyzer::analyzeVarDeclStmt(AST::VarDeclStmt& vds)
 {
-    if (variables.size() == 1 && !isConstExpr(*vds.expr)) throw std::runtime_error("Global variable initializer must be a constant expression");
+    if (vds.expr)
+        if (variables.size() == 1 && !isConstExpr(*vds.expr)) throw std::runtime_error("Global variable initializer must be a constant expression");
 
     if (variables.top().find(vds.name) != variables.top().end()) throw std::runtime_error("Variable '" + typeToString(vds.type) + " " + vds.name + "' already declared");
 
-    variablesTypes.emplace(vds.type);
-    Type exprType = analyzeExpr(*vds.expr);
-    if (!canImplicitlyCast(exprType, vds.type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(vds.type));
+    if (vds.expr)
+    {
+        variablesTypes.emplace(vds.type);
+        Type exprType = analyzeExpr(*vds.expr);
+        if (!canImplicitlyCast(exprType, vds.type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(vds.type));
+
+        variablesTypes.pop();
+    }
+
     variables.top().insert({vds.name, vds.type});
-    variablesTypes.pop();
 }
 
 void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
@@ -57,6 +63,7 @@ void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
 
             return;
         }
+
         copy.pop();
     }
 
@@ -72,7 +79,7 @@ void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
                 {
                     Type exprType = analyzeExpr(*vas.expr);
                     if (!canImplicitlyCast(exprType, field->type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(field->type));
-                    
+
                     return;
                 }
             }
@@ -82,41 +89,153 @@ void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
     throw std::runtime_error("Variable '" + vas.name + "' does not exists");
 }
 
+void SemanticAnalyzer::analyzeFieldAsgnStmt(AST::FieldAsgnStmt& stmt)
+{
+    Type targetType = analyzeExpr(*stmt.target);
+    if (targetType.type != TypeValue::CLASS) throw std::runtime_error("Field assignment on non-class type");
+
+    std::string className = targetType.name;
+    auto classIt = classes.find(className);
+    if (classIt == classes.end()) throw std::runtime_error("Class '" + className + "' not found");
+
+    for (const auto& field : classIt->second.fields)
+    {
+        if (field->name == stmt.name)
+        {
+            Type exprType = analyzeExpr(*stmt.expr);
+            if (!canImplicitlyCast(exprType, field->type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(field->type));
+            
+            return;
+        }
+    }
+    
+    throw std::runtime_error("Field '" + stmt.name + "' does not exist in class '" + className + "'");
+}
+
 void SemanticAnalyzer::analyzeFuncDeclStmt(AST::FuncDeclStmt& fds)
 {
-    if (functions.find(fds.name) != functions.end())
+    auto& overloads = functions[fds.name];
+    for (const auto& existing : overloads)
     {
-        if (functions[fds.name].args == fds.args)
+        if (existing.args.size() != fds.args.size()) continue;
+        bool sameArgs = true;
+        for (size_t i = 0; i < fds.args.size(); i++)
         {
-            std::string args;
-            for (int i = 0; i < fds.args.size(); i++)
+            if (existing.args[i].type.type != fds.args[i].type.type || existing.args[i].type.name != fds.args[i].type.name)
             {
-                args.append(typeToString(fds.args[i].type));
-                if (i < fds.args.size() - 1) args.append(", ");
+                sameArgs = false;
+                break;
+            }
+        }
+
+        if (sameArgs)
+        {
+            std::string argsStr;
+            for (size_t i = 0; i < fds.args.size(); i++)
+            {
+                argsStr.append(typeToString(fds.args[i].type));
+                if (i < fds.args.size() - 1) argsStr.append(", ");
             }
 
-            throw std::runtime_error("Function '" + typeToString(fds.retType) + " " + fds.name + "(" + args + ")' already declared");
+            throw std::runtime_error("Function '" + typeToString(fds.retType) + " " + fds.name + "(" + argsStr + ")' already declared");
         }
     }
 
-    functions.emplace(fds.name, FunctionInfo{ fds.retType, fds.args });
-
     functionReturnTypes.push(fds.retType);
     variables.emplace(std::map<std::string, Type>{});
+    
     for (const auto& arg : fds.args) variables.top()[arg.name] = arg.type;
     for (const auto& stmt : fds.block) analyzeStmt(*stmt);
+
     variables.pop();
     functionReturnTypes.pop();
+
+    FunctionInfo info
+    {
+        .returnType = fds.retType,
+        .args = fds.args,
+        .mangledName = mangleFunction(fds.name, fds.args)
+    };
+    overloads.push_back(std::move(info));
+}
+
+void SemanticAnalyzer::analyzeFuncCallStmt(AST::FuncCallStmt& fcs)
+{
+    std::vector<Type> argTypes;
+    argTypes.reserve(fcs.args.size());
+    for (const auto& a : fcs.args) argTypes.push_back(analyzeExpr(*a));
+
+    auto it = functions.find(fcs.name);
+    if (it == functions.end())
+    {
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                for (const auto& method : classIt->second.methods)
+                {
+                    if (method->name != fcs.name) continue;
+                    if (method->args.size() != argTypes.size()) continue;
+
+                    bool ok = true;
+                    for (size_t i = 0; i < argTypes.size(); i++)
+                        if (!canImplicitlyCast(argTypes[i], method->args[i].type)) { ok = false; break; }
+
+                    if (ok) return;
+                }
+            }
+        }
+
+        throw std::runtime_error("Function '" + fcs.name + "' does not exists");
+    }
+
+    const auto& overloads = it->second;
+    bool matched = false;
+    for (const auto& fn : overloads)
+    {
+        if (fn.args.size() != argTypes.size()) continue;
+
+        bool ok = true;
+        for (size_t i = 0; i < argTypes.size(); i++)
+            if (!canImplicitlyCast(argTypes[i], fn.args[i].type)) { ok = false; break; }
+
+        if (ok) { matched = true; break; }
+    }
+
+    if (!matched)
+    {
+        std::string argsStr;
+        for (size_t i = 0; i < argTypes.size(); i++)
+        {
+            argsStr.append(typeToString(argTypes[i]));
+            if (i < argTypes.size() - 1) argsStr.append(", ");
+        }
+
+        throw std::runtime_error("No matching function for call '" + fcs.name + "(" + argsStr + ")'");
+    }
+}
+
+void SemanticAnalyzer::analyzeMethodCallStmt(AST::MethodCallStmt& mcs)
+{
+    AST::MethodCallExpr expr(std::unique_ptr<AST::Expr>(mcs.object->clone()), mcs.name, {});
+    expr.args.reserve(mcs.args.size());
+    for (const auto& a : mcs.args) expr.args.push_back(std::unique_ptr<AST::Expr>(a->clone()));
+    
+    analyzeMethodCallExpr(expr);
 }
 
 void SemanticAnalyzer::analyzeReturnStmt(AST::ReturnStmt& rs)
 {
     if (functionReturnTypes.empty()) throw std::runtime_error("'return' outside of function");
+    
     Type expected = functionReturnTypes.top();
 
     if (!rs.expr)
     {
         if (expected.type != TypeValue::VOID) throw std::runtime_error("Missing return value for function returning " + typeToString(expected) + "");
+
         return;
     }
 
@@ -197,12 +316,14 @@ void SemanticAnalyzer::analyzeForLoopStmt(AST::ForLoopStmt& fls)
 void SemanticAnalyzer::analyzeBreakStmt()
 {
     if (functionReturnTypes.size() == 0) throw std::runtime_error("break cannot be outside function");
+
     if (loopDepth == 0) throw std::runtime_error("break must be inside a loop");
 }
 
 void SemanticAnalyzer::analyzeContinueStmt()
 {
     if (functionReturnTypes.size() == 0) throw std::runtime_error("continue cannot be outside function");
+    
     if (loopDepth == 0) throw std::runtime_error("continue must be inside a loop");
 }
 
@@ -219,7 +340,29 @@ void SemanticAnalyzer::analyzeClassDeclStmt(AST::ClassDeclStmt& cds)
     classesStack.push(cds.name);
     classes[cds.name] = std::move(classInfo);
 
+    std::vector<std::unique_ptr<AST::Member>> membersCopy;
     for (auto& member : cds.members)
+    {
+        if (auto field = dynamic_cast<AST::FieldMember*>(member.get()))
+            membersCopy.push_back(std::make_unique<AST::FieldMember>(field->access, field->name, field->type, field->expr ? std::unique_ptr<AST::Expr>(field->expr->clone()) : nullptr));
+
+        else if (auto method = dynamic_cast<AST::MethodMember*>(member.get()))
+        {
+            std::vector<std::unique_ptr<AST::Stmt>> blockCopy;
+            for (auto& stmt : method->block) blockCopy.push_back(std::unique_ptr<AST::Stmt>(stmt->clone()));
+
+            membersCopy.push_back(std::make_unique<AST::MethodMember>(method->access, method->name, method->retType, method->args, std::move(blockCopy)));
+        }
+        else if (auto ctor = dynamic_cast<AST::ConstructorMember*>(member.get()))
+        {
+            std::vector<std::unique_ptr<AST::Stmt>> blockCopy;
+            for (auto& stmt : ctor->block) blockCopy.push_back(std::unique_ptr<AST::Stmt>(stmt->clone()));
+
+            membersCopy.push_back(std::make_unique<AST::ConstructorMember>(ctor->access, ctor->args, std::move(blockCopy)));
+        }
+    }
+
+    for (auto& member : membersCopy)
     {
         if (auto field = dynamic_cast<AST::FieldMember*>(member.get()))
         {
@@ -231,18 +374,25 @@ void SemanticAnalyzer::analyzeClassDeclStmt(AST::ClassDeclStmt& cds)
             analyzeMethodMember(cds.name, classInfo.methods, *method);
             classes[cds.name].methods.emplace_back(static_cast<AST::MethodMember*>(member.release()));
         }
+        else if (auto ctor = dynamic_cast<AST::ConstructorMember*>(member.get()))
+        {
+            analyzeConstructorMember(cds.name, classInfo.constructors, *ctor);
+            classes[cds.name].constructors.emplace_back(static_cast<AST::ConstructorMember*>(member.release()));
+        }
         else throw std::runtime_error("Unsupported class member declaration");
     }
 
     classesStack.pop();
 }
 
-void SemanticAnalyzer::analyzeFieldMember(std::vector<std::unique_ptr<AST::FieldMember>>& fields, AST::FieldMember& fm)
+void SemanticAnalyzer::analyzeFieldMember(std::vector<std::unique_ptr<AST::FieldMember>>& fields, AST::FieldMember& field)
 {
-    for (const auto& existing : fields) if (existing->name == fm.name) throw std::runtime_error("Field '" + fm.name + "' already declared");
-
-    Type exprType = analyzeExpr(*fm.expr);
-    if (!canImplicitlyCast(exprType, fm.type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(fm.type));
+    for (const auto& existing : fields) if (existing->name == field.name) throw std::runtime_error("Field '" + field.name + "' already declared");
+    if (field.expr)
+    {
+        Type exprType = analyzeExpr(*field.expr);
+        if (!canImplicitlyCast(exprType, field.type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(field.type));
+    }
 }
 
 void SemanticAnalyzer::analyzeMethodMember(std::string className, std::vector<std::unique_ptr<AST::MethodMember>>& methods, AST::MethodMember& mm)
@@ -278,8 +428,38 @@ void SemanticAnalyzer::analyzeMethodMember(std::string className, std::vector<st
     functionReturnTypes.push(mm.retType);
     variables.emplace(std::map<std::string, Type>{});
     variables.top()["this"] = Type(TypeValue::CLASS, className);
+
     for (const auto& arg : mm.args) variables.top()[arg.name] = arg.type;
     for (const auto& stmt : mm.block) analyzeStmt(*stmt);
+
+    variables.pop();
+    functionReturnTypes.pop();
+}
+
+void SemanticAnalyzer::analyzeConstructorMember(std::string className, std::vector<std::unique_ptr<AST::ConstructorMember>>& ctors, AST::ConstructorMember& cm)
+{
+    for (const auto& existing : ctors)
+    {
+        if (existing->args.size() != cm.args.size()) continue;
+        bool sameArgs = true;
+        for (size_t i = 0; i < cm.args.size(); i++)
+        {
+            if (existing->args[i].type.type != cm.args[i].type.type || existing->args[i].type.name != cm.args[i].type.name)
+            {
+                sameArgs = false;
+                break;
+            }
+        }
+        if (sameArgs) throw std::runtime_error("Constructor with the same signature already declared for class '" + className + "'");
+    }
+
+    functionReturnTypes.push(Type(TypeValue::VOID, "void"));
+    variables.emplace(std::map<std::string, Type>{});
+    variables.top()["this"] = Type(TypeValue::CLASS, className);
+
+    for (const auto& arg : cm.args) variables.top()[arg.name] = arg.type;
+    for (const auto& stmt : cm.block) analyzeStmt(*stmt);
+
     variables.pop();
     functionReturnTypes.pop();
 }
@@ -291,7 +471,10 @@ Type SemanticAnalyzer::analyzeExpr(const AST::Expr& expr)
     else if (auto unary = dynamic_cast<const AST::UnaryExpr*>(&expr)) return analyzeUnaryExpr(*unary);
     else if (auto var = dynamic_cast<const AST::VarExpr*>(&expr)) return analizeVarExpr(*var);
     else if (auto func = dynamic_cast<const AST::FuncCallExpr*>(&expr)) return analyzeFuncCallExpr(*func);
-    else if (auto n = dynamic_cast<const AST::NewExpr*>(&expr)) return analyzeNewExpr(*n);
+    else if (auto newExpr = dynamic_cast<const AST::NewExpr*>(&expr)) return analyzeNewExpr(*newExpr);
+    else if (auto field = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return analyzeFieldAccessExpr(*field);
+    else if (auto method = dynamic_cast<const AST::MethodCallExpr*>(&expr)) return analyzeMethodCallExpr(*method);
+    else if (auto thisExpr = dynamic_cast<const AST::ThisExpr*>(&expr)) return analyzeThisExpr(*thisExpr);
     
     throw std::runtime_error("Unknown expression type in semantic analysis");
 }
@@ -304,6 +487,11 @@ Type SemanticAnalyzer::analyzeBinaryExpr(const AST::BinaryExpr& expr)
     switch (expr.op)
     {
         case TokenType::PLUS:
+            if (leftType.type == TypeValue::STRING && rightType.type == TypeValue::STRING)
+                return Type(TypeValue::STRING, "string");
+            if (!canImplicitlyCast(leftType, rightType) && !canImplicitlyCast(rightType, leftType)) throw std::runtime_error("Type error: " + typeToString(leftType) + " and " + typeToString(rightType));
+
+            return leftType;
         case TokenType::MINUS:
         case TokenType::MULTIPLY:
         case TokenType::DIVIDE:
@@ -364,6 +552,7 @@ Type SemanticAnalyzer::analizeVarExpr(const AST::VarExpr& expr)
         const auto& scope = copy.top();
         auto it = scope.find(expr.name);
         if (it != scope.end()) return it->second;
+
         copy.pop();
     }
 
@@ -383,30 +572,148 @@ Type SemanticAnalyzer::analizeVarExpr(const AST::VarExpr& expr)
 
 Type SemanticAnalyzer::analyzeFuncCallExpr(const AST::FuncCallExpr& expr)
 {
+    std::vector<Type> argTypes;
+    argTypes.reserve(expr.args.size());
+    for (const auto& a : expr.args) argTypes.push_back(analyzeExpr(*a));
+
     auto it = functions.find(expr.name);
-    if (it == functions.end()) throw std::runtime_error("Function '" + expr.name + "' does not exists");
-
-    const FunctionInfo& info = it->second;
-
-    if (info.args.size() != expr.args.size()) throw std::runtime_error("Function '" + expr.name + "' expects " + std::to_string(info.args.size()) + " argument(s), got " + std::to_string(expr.args.size()));
-
-    for (size_t i = 0; i < expr.args.size(); ++i)
+    if (it == functions.end())
     {
-        Type passed = analyzeExpr(*expr.args[i]);
-        Type expected = info.args[i].type;
-        if (!canImplicitlyCast(passed, expected)) throw std::runtime_error("Type error in call to '" + expr.name + "' at argument " + std::to_string(i) + ": expected " + typeToString(expected) + ", got " + typeToString(passed));
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                for (const auto& method : classIt->second.methods)
+                {
+                    if (method->name != expr.name) continue;
+                    if (method->args.size() != argTypes.size()) continue;
+
+                    bool ok = true;
+                    for (size_t i = 0; i < argTypes.size(); i++)
+                        if (!canImplicitlyCast(argTypes[i], method->args[i].type)) { ok = false; break; }
+
+                    if (ok) return method->retType;
+                }
+            }
+        }
+
+        throw std::runtime_error("Function '" + expr.name + "' does not exists");
     }
 
-    return info.returnType;
+    const auto& overloads = it->second;
+    for (const auto& fn : overloads)
+    {
+        if (fn.args.size() != argTypes.size()) continue;
+        
+        bool ok = true;
+        for (size_t i = 0; i < argTypes.size(); i++)
+            if (!canImplicitlyCast(argTypes[i], fn.args[i].type)) { ok = false; break; }
+
+        if (ok) return fn.returnType;
+    }
+
+    std::string argsStr;
+    for (size_t i = 0; i < argTypes.size(); i++)
+    {
+        argsStr.append(typeToString(argTypes[i]));
+        if (i < argTypes.size() - 1) argsStr.append(", ");
+    }
+
+    throw std::runtime_error("No matching function for call '" + expr.name + "(" + argsStr + ")'");
 }
 
 Type SemanticAnalyzer::analyzeNewExpr(const AST::NewExpr& expr)
 {
-    if (classes.find(expr.name) == classes.end()) throw std::runtime_error("Object '" + expr.name + "' does not exists");
+    auto classIt = classes.find(expr.name);
+    if (classIt == classes.end()) throw std::runtime_error("Object '" + expr.name + "' does not exists");
 
     if (expr.name != variablesTypes.top().name) throw std::runtime_error("Type error: Cannot implicitly cast " + expr.name + " to " + variablesTypes.top().name);
-    
+
+    std::vector<Type> argTypes;
+    argTypes.reserve(expr.args.size());
+    for (const auto& a : expr.args) argTypes.push_back(analyzeExpr(*a));
+
+    const auto& constructors = classIt->second.constructors;
+    bool insideSameClass = !classesStack.empty() && classesStack.top() == expr.name;
+
+    bool found = false;
+    bool publicAccess = false;
+
+    if (!constructors.empty())
+    {
+        for (const auto& constructor : constructors)
+        {
+            if (constructor->args.size() != argTypes.size()) continue;
+
+            bool ok = true;
+            for (size_t i = 0; i < argTypes.size(); i++)
+                if (!canImplicitlyCast(argTypes[i], constructor->args[i].type)) { ok = false; break; }
+
+            if (!ok) continue;
+
+            found = true;
+            if (constructor->access == AST::AccessModifier::PUBLIC) publicAccess = true;
+
+            break;
+        }
+        
+        if (!found) throw std::runtime_error("No matching constructor for '" + expr.name + "'");
+        if (!insideSameClass && !publicAccess) throw std::runtime_error("Constructor for '" + expr.name + "' is not public");
+    }
+    else if (!argTypes.empty()) throw std::runtime_error("No matching constructor for '" + expr.name + "'");
+
     return Type(TypeValue::CLASS, expr.name);
+}
+
+Type SemanticAnalyzer::analyzeFieldAccessExpr(const AST::FieldAccessExpr& expr)
+{
+    Type objectType = analyzeExpr(*expr.object);
+    if (objectType.type != TypeValue::CLASS) throw std::runtime_error("Field access on non-class type");
+
+    std::string className = objectType.name;
+    auto classIt = classes.find(className);
+    if (classIt == classes.end()) throw std::runtime_error("Class '" + className + "' not found");
+
+    for (std::unique_ptr<AST::FieldMember>& field : classIt->second.fields)
+        if (field->name == expr.name)
+            return field->type;
+    
+    throw std::runtime_error("Field '" + expr.name + "' does not exists in class '" + className + "'");
+}
+
+Type SemanticAnalyzer::analyzeMethodCallExpr(const AST::MethodCallExpr& expr)
+{
+    Type objectType = analyzeExpr(*expr.object);
+    if (objectType.type != TypeValue::CLASS) throw std::runtime_error("Method call on non-class type");
+
+    std::string className = objectType.name;
+    auto classIt = classes.find(className);
+    if (classIt == classes.end()) throw std::runtime_error("Class '" + className + "' not found");
+
+    std::vector<Type> argTypes;
+    argTypes.reserve(expr.args.size());
+    for (const auto& a : expr.args) argTypes.push_back(analyzeExpr(*a));
+
+    for (const auto& method : classIt->second.methods)
+    {
+        if (method->name != expr.name) continue;
+        if (method->args.size() != argTypes.size()) continue;
+
+        bool ok = true;
+        for (size_t i = 0; i < argTypes.size(); i++)
+            if (!canImplicitlyCast(argTypes[i], method->args[i].type)) { ok = false; break; }
+
+        if (ok) return method->retType;
+    }
+
+    throw std::runtime_error("No matching method '" + expr.name + "' found in class '" + className + "'");
+}
+
+Type SemanticAnalyzer::analyzeThisExpr(const AST::ThisExpr& expr)
+{
+    return Type(TypeValue::CLASS, classesStack.top());
 }
 
 bool SemanticAnalyzer::canImplicitlyCast(Type l, Type r)
@@ -445,4 +752,37 @@ std::string typeToString(Type type)
         case TypeValue::CLASS: return "class <" + type.name + ">";
         default: return "unknown";
     }
+}
+
+std::string SemanticAnalyzer::mangleFunction(const std::string& name, const AST::Arguments& args) const
+{
+    std::vector<Type> types; types.reserve(args.size());
+    for (const auto& a : args) types.push_back(a.type);
+
+    return mangleFunction(name, types);
+}
+
+std::string SemanticAnalyzer::mangleFunction(const std::string& name, const std::vector<Type>& types) const
+{
+    std::string mangled = name + "__";
+    for (size_t i = 0; i < types.size(); i++)
+    {
+        const Type& t = types[i];
+        switch (t.type)
+        {
+            case TypeValue::INT: mangled += "i"; break;
+            case TypeValue::FLOAT: mangled += "f"; break;
+            case TypeValue::DOUBLE: mangled += "d"; break;
+            case TypeValue::CHAR: mangled += "c"; break;
+            case TypeValue::BOOL: mangled += "b"; break;
+            case TypeValue::STRING: mangled += "s"; break;
+            case TypeValue::VOID: mangled += "v"; break;
+            case TypeValue::CLASS: mangled += "C" + t.name; break;
+            default: mangled += "u"; break;
+        }
+
+        if (i + 1 < types.size()) mangled += "_";
+    }
+
+    return mangled;
 }

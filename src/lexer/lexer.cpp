@@ -1,8 +1,5 @@
 #include "../../include/lexer/lexer.hpp"
-#include <cctype>
 #include <stdexcept>
-#include <vector>
-#include <string>
 
 Lexer::Lexer(const std::string initSource)
 {
@@ -15,6 +12,7 @@ Lexer::Lexer(const std::string initSource)
     keywords["double"] = TokenType::DOUBLE;
     keywords["char"] = TokenType::CHAR;
     keywords["bool"] = TokenType::BOOL;
+    keywords["string"] = TokenType::STRING;
     keywords["void"] = TokenType::VOID;
     keywords["var"] = TokenType::VAR;
     keywords["func"] = TokenType::FUNC;
@@ -31,6 +29,7 @@ Lexer::Lexer(const std::string initSource)
     keywords["priv"] = TokenType::PRIVATE;
     keywords["new"] = TokenType::NEW;
     keywords["this"] = TokenType::THIS;
+    keywords["constructor"] = TokenType::CONSTRUCTOR;
     keywords["echo"] = TokenType::ECHO;
 }
 

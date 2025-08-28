@@ -1,7 +1,7 @@
 # StageLang
 **Stage** - multi-paradigm programming language
 
-Compiler version: **v0.3** – C++ &amp; LLVM
+Compiler version: **v0.4** – C++ &amp; LLVM
 
 ## Installation (Linux)
 
@@ -94,6 +94,7 @@ List of _primitive_ types:
 * float _(32 bits)_
 * double _(64 bits)_
 * char _(8 bits)_
+* string
 * bool
 * void (for return type in functions)
 
@@ -162,7 +163,7 @@ The language supports the following operators. All binary operators are left-ass
   - Function call: `name(arg1, arg2, ...)`
 
 Type rules (summary):
-- Arithmetic operators work on numeric types; implicit widening casts are allowed (`int -> float -> double`).
+- Arithmetic operators work on string and numeric types; implicit widening casts are allowed (`int -> float -> double`).
 - Comparisons allow numeric comparisons and produce `bool`.
 - Logical operators require `bool` operands and produce `bool`.
 - Assignment (incl. compound) requires the right-hand side to be implicitly castable to the variable type.
@@ -172,27 +173,33 @@ List of statements:
 * [Global variables definition](#global-variables-definition)
 * [Function definition](#function-definition)
 * [Local variables definition](#local-variables-definition)
+* [Comments](#comments)
 * [If/Else statements](#ifelse-statements)
 * [While loop](#while-loop)
 * [Do/while loop](#dowhile-loop)
 * [For loop](#for-loop)
 * [Echo](#echo-statement)
+* [Classes](#classes)
 
 > [!NOTE]
 > In the end all statements you must be add `;` character.
 
 ## Global Variables Definition
-For global variable definition you need use the keyword `var`, type, identifier and initializer. For example:
+For global variable definition you need use the keyword `var`, type, identifier and initializer (if needed). For example:
 ```C++
 var int test1 = 10;
 var bool test2 = true;
+var int test3;  // has value of 0
 ```
 
 > [!WARNING]
 > Global variables must be initialized by constant expression.
 
+> [!NOTE]
+> If you have not initialized the variable, its value will be the default value for its type.
+
 ## Function Definition
-For functions definition you need use the keyword `func`, type, identifier, declaration arguments between round brackets and block between braces. For example:
+For functions definition you need use the keyword `func`, type, identifier, declaration arguments between round brackets and block between braces. There is support for function overloads. For example:
 ```C++
 func void test()
 {
@@ -231,6 +238,28 @@ func void test()
 ## Local Variables Definition
 Local variables definition like global, but they can be initialized not only by constant expressions. After end block of statements local variables will be deleted. For example:
 ```C++
+func int main()
+{
+    var int a = 10;
+    var int b;  // has value of 0
+
+    return 0;
+}
+```
+
+## Comments
+Single-line comment:
+```C++
+var int a = 10;   // this is variable
+```
+
+Multi-line comment:
+```C++
+///func void test()
+{
+
+}///
+
 func int main()
 {
     var int a = 10;
@@ -377,3 +406,167 @@ func int main()
     return 0;
 }
 ```
+
+## Classes
+This language support a simple class declaration system. Classes have _members_, each member has its own _access modifier_ (pub/priv) that define a member's access outside the class. There are 3 types of member: fields, methods, constructors.
+
+### Class definition
+For class definition you need use keyword `class`, identifier and block of members. For example:
+```C++
+class Test
+{
+    // members
+}
+```
+
+### Field definition
+For field definition you need use access modifier, keyword `var`, type, identifier and initializer expression (if needed). For example:
+```C++
+class Person
+{
+    pub var string name;
+    priv var int age = 15;
+}
+```
+
+### Method definition
+Methods are definition as functions, but with an access modifier at the beginning. For example:
+```C++
+class Car
+{
+    priv var int maxSpeed = 200;
+   
+    pub func void startEngine()
+    {
+        echo "Vroom vroom...";
+    }
+
+    pub func int getMaxSpeed()
+    {
+        return maxSpeed;
+    }
+
+    pub func void setMaxSpeed(int speed)
+    {
+        maxSpeed = speed;
+    }
+}
+```
+
+### Constructor definition
+For constructor definition you need use access modifier, keyword `constructor`, declaration arguments between round brackets and block between braces. For example:
+```C++
+class Box
+{
+    priv var int number;
+
+    pub constructor(int num)
+    {
+        number = num;
+    }
+}
+```
+
+> [!NOTE]
+> The constructor's access modifier determines whether it will be available outside of the current class or not.
+
+### Creating Instances
+For create class instance you need specify the class name as the type and in initialization expression use operator `new`, class name and expressions between round brackets. For example:
+```C++
+class Box
+{
+    priv var int number;
+
+    pub constructor(int num)
+    {
+        number = num;
+    }
+}
+
+func int main()
+{
+    var Box box = new Box(123);
+
+    return 0;
+}
+```
+
+### Chain of calls
+If you need use chain of calls you need use operator `->` between objects. For example:
+```C++
+class Car
+{
+    priv var int maxSpeed = 200;
+   
+    pub func void startEngine()
+    {
+        echo "Vroom vroom...";
+    }
+
+    pub func int getMaxSpeed()
+    {
+        return maxSpeed;
+    }
+
+    pub func void setMaxSpeed(int speed)
+    {
+        maxSpeed = speed;
+    }
+}
+
+func int main()
+{
+    var Car car = new Car();
+    car->startEngine();
+    echo car->getMaxSpeed();
+    
+    return 0;
+}
+```
+
+> [!WARNING]
+> Call chains don't work with nested objects yet and can only handle 2 objects (class -> field/method) and code:
+> ```C++
+> obj1->obj2->obj3
+> ```
+> does not work on current language version
+
+### This context
+To access a member of a class (calling a method/getting a field value) inside this class, you can use the `this` operator. For example:
+```C++
+class Car
+{
+    priv var int maxSpeed = 200;
+
+    pub func int getMaxSpeed()
+    {
+        return this->maxSpeed;
+    }
+
+    pub func void setMaxSpeed(int maxSpeed)
+    {
+        this->maxSpeed = maxSpeed;  // this->maxSpeed and maxSpeed not equals
+    }
+}
+```
+
+> [!TIP]
+> If you need to call another method inside a method before defining it, then you need to use `this`. For example:
+> ```C++
+> class Car
+> {
+>     priv var int maxSpeed = 200;
+> 
+>     pub func void init()
+>     {
+>         this->startEngine();
+>     }
+>
+>     priv func void startEngine()
+>     {
+>         echo "Vroom vroom...";
+>     }
+> }
+> ```
+
+More examples you can see in `examples` directory.

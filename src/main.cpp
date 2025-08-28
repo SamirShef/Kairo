@@ -4,10 +4,6 @@
 #include "../include/semantic/semanticanalyzer.hpp"
 #include <iostream>
 #include <fstream>
-#include <map>
-#include <string>
-#include <vector>
-#include <cstdlib>
 
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/FileSystem.h"
@@ -15,10 +11,6 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
-
-#include <array>
-#include <cstdio>
-#include <memory>
 
 std::map<std::string, Value> variables;
 
@@ -83,6 +75,7 @@ int main(int argc, char** argv)
     if (module->getFunction("main") == nullptr)
     {
         std::cerr << "Program does not have entry point 'main'" << std::endl;
+        return 1;
     }
     auto getTriple = []() -> std::string
     {

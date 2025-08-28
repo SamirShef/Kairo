@@ -4,9 +4,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include <llvm/IR/Value.h>
-#include <memory>
 #include <stack>
 #include <map>
+#include <vector>
 
 class CodeGenerator
 {
@@ -15,19 +15,35 @@ private:
     llvm::IRBuilder<> builder;
     std::unique_ptr<llvm::Module> module;
     std::stack<std::map<std::string, llvm::Value*>> scopeStack;
+    std::stack<std::map<std::string, Type>> typesScopeStack;
     std::stack<std::pair<llvm::BasicBlock*, llvm::BasicBlock*>> loopBlocks;
+
+    struct FunctionInfo
+    {
+        Type returnType;
+        AST::Arguments args;
+        std::string mangledName;
+        llvm::Function* function;
+    };
+    
+    std::map<std::string, std::vector<FunctionInfo>> functions;
 
     struct ClassInfo
     {
         llvm::StructType* type;
         std::map<std::string, int> fieldIndices;
-        std::map<std::string, llvm::Function*> methods;
+        std::map<std::string, std::vector<llvm::Function*>> methods;
+        std::vector<llvm::Function*> constructors;
     };
     std::map<std::string, ClassInfo> classes;
     std::stack<std::string> classesStack;
 
     llvm::Type* getLLVMType(Type);
     llvm::Value* castToExpectedIfNeeded(llvm::Value* value, llvm::Type* expectedType);
+    std::string resolveClassName(const AST::Expr&);
+    std::string mangleFunction(const std::string&, const AST::Arguments&) const;
+    std::string mangleFunction(const std::string&, const std::vector<Type>&) const;
+    llvm::Function* declareFunctionPrototype(const AST::FuncDeclStmt&);
     
     void pushScope();
     void popScope();
@@ -37,8 +53,10 @@ private:
     void generateStmt(const AST::Stmt&);
     void generateVarDeclStmt(const AST::VarDeclStmt&);
     void generateVarAsgnStmt(const AST::VarAsgnStmt&);
+    void generateFieldAsgnStmt(const AST::FieldAsgnStmt&);
     void generateFuncDeclStmt(const AST::FuncDeclStmt&);
     void generateFuncCallStmt(const AST::FuncCallStmt&);
+    void generateMethodCallStmt(const AST::MethodCallStmt&);
     void generateReturnStmt(const AST::ReturnStmt&);
     void generateIfElseStmt(const AST::IfElseStmt&);
     void generateWhileLoopStmt(const AST::WhileLoopStmt&);
@@ -50,6 +68,7 @@ private:
     void generateClassDeclStmt(const AST::ClassDeclStmt&);
     void generateFieldDeclStmt(const AST::FieldMember&);
     void generateMethodDeclStmt(const AST::MethodMember&);
+    void generateConstructorDecl(const AST::ConstructorMember&);
 
     llvm::Value* generateExpr(const AST::Expr&);
     llvm::Value* generateLiteral(const AST::Literal&);

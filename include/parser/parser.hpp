@@ -1,8 +1,6 @@
 #pragma once
 #include "ast.hpp"
 #include "../lexer/token.hpp"
-#include <string>
-#include <vector>
 
 class Parser
 {
@@ -19,7 +17,9 @@ private:
     AST::StmtPtr parseVarDeclStmt();
     AST::StmtPtr parseFuncDeclStmt();
     AST::StmtPtr parseFuncCallStmt();
+    AST::StmtPtr parseThisStmt();
     AST::StmtPtr parseVarAsgnStmt(bool);
+    AST::StmtPtr parseObjectChainStmt();
     AST::StmtPtr parseReturnStmt();
     AST::StmtPtr parseIfElseStmt();
     AST::StmtPtr parseWhileLoopStmt();
@@ -30,6 +30,7 @@ private:
     AST::StmtPtr parseClassDeclStmt();
     std::unique_ptr<AST::Member> parseFieldDecl(AST::AccessModifier&);
     std::unique_ptr<AST::Member> parseMethodDecl(AST::AccessModifier&);
+    std::unique_ptr<AST::Member> parseConstructorDecl(AST::AccessModifier&);
     AST::StmtPtr parseEchoStmt();
 
     AST::ExprPtr createCompoundAssignmentOperator(Token&);
@@ -43,8 +44,9 @@ private:
     AST::ExprPtr parseUnary();
     AST::ExprPtr parsePrimary();
     AST::ExprPtr parseNewExpr();
-    AST::ExprPtr parseFieldAccess();
-    AST::ExprPtr parseMethodCall();
+    AST::ExprPtr parseCallsChain(AST::ExprPtr);
+    AST::ExprPtr parseFieldAccessExpr(AST::ExprPtr, std::string&);
+    AST::ExprPtr parseMethodCallExpr(AST::ExprPtr, std::string&);
     AST::ExprPtr parseThisExpr();
     
     Type consumeType();

@@ -10,14 +10,13 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
-#include <stdexcept>
-#include <vector>
 
 CodeGenerator::CodeGenerator(const std::string& moduleName) : context(), builder(context), module(std::make_unique<llvm::Module>(moduleName, context))
 {
     scopeStack.emplace(std::map<std::string, llvm::Value*>{});
+    typesScopeStack.emplace(std::map<std::string, Type>{});
 
-    auto ptrTy = llvm::Type::getInt8Ty(context);
+    auto ptrTy = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
     auto sizeTy = llvm::Type::getInt64Ty(context);
     auto mallocTy = llvm::FunctionType::get(ptrTy, {sizeTy}, false);
     module->getOrInsertFunction("malloc", mallocTy);
@@ -26,17 +25,24 @@ CodeGenerator::CodeGenerator(const std::string& moduleName) : context(), builder
 void CodeGenerator::pushScope()
 {
     scopeStack.emplace(std::map<std::string, llvm::Value*>{});
+    typesScopeStack.emplace(std::map<std::string, Type>{});
 }
 
 void CodeGenerator::popScope()
 {
     if (scopeStack.empty()) throw std::runtime_error("Scope underflow");
+
     scopeStack.pop();
+
+    if (typesScopeStack.empty()) throw std::runtime_error("Types scope underflow");
+
+    typesScopeStack.pop();
 }
 
 void CodeGenerator::setNamedValue(const std::string& name, llvm::Value* value)
 {
     if (scopeStack.empty()) throw std::runtime_error("No active scope");
+
     scopeStack.top()[name] = value;
 }
 
@@ -48,9 +54,42 @@ llvm::Value* CodeGenerator::getNamedValue(const std::string& name) const
         const auto& scope = copy.top();
         auto it = scope.find(name);
         if (it != scope.end()) return it->second;
+
         copy.pop();
     }
+
     return nullptr;
+}
+
+std::string CodeGenerator::resolveClassName(const AST::Expr& expr)
+{
+    if (auto var = dynamic_cast<const AST::VarExpr*>(&expr))
+    {
+        auto copy = typesScopeStack;
+        while (!copy.empty())
+        {
+            const auto& scope = copy.top();
+            auto it = scope.find(var->name);
+            if (it != scope.end())
+            {
+                if (it->second.type == TypeValue::CLASS) return it->second.name;
+
+                throw std::runtime_error("Variable '" + var->name + "' is not a class instance");
+            }
+
+            copy.pop();
+        }
+    }
+    else if (dynamic_cast<const AST::ThisExpr*>(&expr))
+    {
+        if (classesStack.empty()) throw std::runtime_error("'this' used outside of class method");
+
+        return classesStack.top();
+    }
+    else if (auto field = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return resolveClassName(*field->object);
+    else if (auto method = dynamic_cast<const AST::MethodCallExpr*>(&expr)) return resolveClassName(*method->object);
+
+    throw std::runtime_error("Unable to resolve class name for expression");
 }
 
 llvm::Type* CodeGenerator::getLLVMType(Type type)
@@ -62,6 +101,7 @@ llvm::Type* CodeGenerator::getLLVMType(Type type)
         case TypeValue::DOUBLE: return llvm::Type::getDoubleTy(context);
         case TypeValue::CHAR: return llvm::Type::getInt8Ty(context);
         case TypeValue::BOOL: return llvm::Type::getInt1Ty(context);
+        case TypeValue::STRING: return llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
         case TypeValue::VOID: return llvm::Type::getVoidTy(context);
         case TypeValue::CLASS:
         {
@@ -78,26 +118,31 @@ llvm::Type* CodeGenerator::getLLVMType(Type type)
 llvm::Value* CodeGenerator::castToExpectedIfNeeded(llvm::Value* value, llvm::Type* expectedType)
 {
     llvm::Type* srcType = value->getType();
+
     if (srcType == expectedType) return value;
 
     if (srcType->isIntegerTy() && expectedType->isIntegerTy())
     {
         unsigned srcBits = srcType->getIntegerBitWidth();
         unsigned dstBits = expectedType->getIntegerBitWidth();
+
         if (srcBits < dstBits) return builder.CreateSExt(value, expectedType, "sexttmp");
     }
 
     if (srcType->isFloatTy() && expectedType->isDoubleTy()) return builder.CreateFPExt(value, expectedType, "fpexttmp");
-
+    
     if (srcType->isIntegerTy() && (expectedType->isFloatTy() || expectedType->isDoubleTy())) return builder.CreateSIToFP(value, expectedType, "sitofptmp");
-
+    
     if ((srcType->isFloatTy() || srcType->isDoubleTy()) && expectedType->isIntegerTy()) return builder.CreateFPToSI(value, expectedType, "fptositmp");
-
+    
     return value;
 }
 
 void CodeGenerator::generate(const std::vector<AST::StmtPtr>& stmts)
 {
+    for (const auto& stmt : stmts)
+        if (auto fds = dynamic_cast<const AST::FuncDeclStmt*>(stmt.get())) declareFunctionPrototype(*fds);
+
     for (const auto& stmt : stmts) generateStmt(*stmt);
 }
 
@@ -105,8 +150,10 @@ void CodeGenerator::generateStmt(const AST::Stmt& stmt)
 {
     if (auto vds = dynamic_cast<const AST::VarDeclStmt*>(&stmt)) generateVarDeclStmt(*vds);
     else if (auto vas = dynamic_cast<const AST::VarAsgnStmt*>(&stmt)) generateVarAsgnStmt(*vas);
+    else if (auto fas = dynamic_cast<const AST::FieldAsgnStmt*>(&stmt)) generateFieldAsgnStmt(*fas);
     else if (auto fds = dynamic_cast<const AST::FuncDeclStmt*>(&stmt)) generateFuncDeclStmt(*fds);
     else if (auto fcs = dynamic_cast<const AST::FuncCallStmt*>(&stmt)) generateFuncCallStmt(*fcs);
+    else if (auto mcs = dynamic_cast<const AST::MethodCallStmt*>(&stmt)) generateMethodCallStmt(*mcs);
     else if (auto rs = dynamic_cast<const AST::ReturnStmt*>(&stmt)) generateReturnStmt(*rs);
     else if (auto ies = dynamic_cast<const AST::IfElseStmt*>(&stmt)) generateIfElseStmt(*ies);
     else if (auto wls = dynamic_cast<const AST::WhileLoopStmt*>(&stmt)) generateWhileLoopStmt(*wls);
@@ -120,8 +167,15 @@ void CodeGenerator::generateStmt(const AST::Stmt& stmt)
 
 void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
 {
-    llvm::Value* initValue = generateExpr(*stmt.expr);
-
+    llvm::Value* initValue = nullptr;
+    if (stmt.expr) initValue = generateExpr(*stmt.expr);
+    else
+    {
+        llvm::Type* ty = getLLVMType(stmt.type);
+        if (stmt.type.type == TypeValue::STRING) initValue = builder.CreateGlobalString("", "empty_str");
+        else initValue = llvm::Constant::getNullValue(ty);
+    }
+    
     if (builder.GetInsertBlock() == nullptr)
     {
         llvm::Constant* constantInit = llvm::dyn_cast<llvm::Constant>(initValue);
@@ -130,18 +184,49 @@ void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
 
         llvm::GlobalVariable* gv = new llvm::GlobalVariable(*module, getLLVMType(stmt.type), false, llvm::GlobalValue::ExternalLinkage, constantInit, stmt.name);
         setNamedValue(stmt.name, gv);
+
         return;
     }
-    
+
     llvm::AllocaInst* alloca = builder.CreateAlloca(getLLVMType(stmt.type), nullptr, stmt.name + ".addr");
     builder.CreateStore(initValue, alloca);
     setNamedValue(stmt.name, alloca);
+    typesScopeStack.top()[stmt.name] = stmt.type;
 }
 
 void CodeGenerator::generateVarAsgnStmt(const AST::VarAsgnStmt& vas)
 {
     llvm::Value* address = getNamedValue(vas.name);
-    if (address == nullptr) throw std::runtime_error("Variable '" + vas.name + "' does not exists");
+    if (address == nullptr) 
+    {
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                auto fieldIt = classIt->second.fieldIndices.find(vas.name);
+                if (fieldIt != classIt->second.fieldIndices.end())
+                {
+                    llvm::Value* thisPtr = getNamedValue("this");
+                    if (!thisPtr) throw std::runtime_error("'this' not available in method");
+                    
+                    int fieldIndex = fieldIt->second;
+                    llvm::Value* gep = builder.CreateStructGEP(classIt->second.type, thisPtr, fieldIndex, vas.name + ".addr");
+                    
+                    llvm::Value* value = generateExpr(*vas.expr);
+                    llvm::Type* fieldTy = classIt->second.type->getElementType(fieldIndex);
+                    value = castToExpectedIfNeeded(value, fieldTy);
+                    
+                    builder.CreateStore(value, gep);
+
+                    return;
+                }
+            }
+        }
+        
+        throw std::runtime_error("Variable '" + vas.name + "' does not exists");
+    }
 
     llvm::Type* valueType = nullptr;
     if (auto* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(address)) valueType = allocaInst->getAllocatedType();
@@ -154,61 +239,160 @@ void CodeGenerator::generateVarAsgnStmt(const AST::VarAsgnStmt& vas)
     builder.CreateStore(expr, address);
 }
 
+void CodeGenerator::generateFieldAsgnStmt(const AST::FieldAsgnStmt& stmt)
+{
+    llvm::Value* baseObjectPtr = nullptr;
+    if (auto field = dynamic_cast<const AST::FieldAccessExpr*>(stmt.object.get())) baseObjectPtr = generateExpr(*field->object);
+    else baseObjectPtr = generateExpr(*stmt.object);
+
+    std::string className = resolveClassName(*stmt.object);
+    
+    auto classIt = classes.find(className);
+    if (classIt == classes.end()) throw std::runtime_error("Class not found: " + className);
+    
+    auto fieldIt = classIt->second.fieldIndices.find(stmt.name);
+    if (fieldIt == classIt->second.fieldIndices.end()) throw std::runtime_error("Field not found: " + stmt.name);
+    
+    int fieldIndex = fieldIt->second;
+    llvm::Value* gep = builder.CreateStructGEP(classIt->second.type, baseObjectPtr, fieldIndex, stmt.name + ".addr");
+    
+    llvm::Value* value = generateExpr(*stmt.expr);
+    llvm::Type* fieldTy = classIt->second.type->getElementType(fieldIndex);
+    value = castToExpectedIfNeeded(value, fieldTy);
+
+    builder.CreateStore(value, gep);
+}
+
 void CodeGenerator::generateFuncDeclStmt(const AST::FuncDeclStmt& stmt)
 {
-    std::vector<llvm::Type*> argTypes;
-    for (const AST::Argument& arg : stmt.args) argTypes.push_back(getLLVMType(arg.type));
-    
-    llvm::FunctionType* funcType = llvm::FunctionType::get(getLLVMType(stmt.retType), argTypes, false);
-
-    llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, stmt.name, *module);
+    llvm::Function* func = declareFunctionPrototype(stmt);
 
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", func);
     builder.SetInsertPoint(entry);
     
     pushScope();
 
-    auto argIt = func->arg_begin();
-    for (size_t i = 0; i < stmt.args.size() && argIt != func->arg_end(); ++i, ++argIt)
+    size_t index = 0;
+    for (auto& arg : func->args())
     {
-        llvm::Argument& arg = *argIt;
-        arg.setName(stmt.args[i].name);
-        
-        llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, stmt.args[i].name + ".addr");
-        
+        arg.setName(stmt.args[index].name);
+        llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, stmt.args[index].name + ".addr");
         builder.CreateStore(&arg, alloca);
-        setNamedValue(stmt.args[i].name, alloca);
+        setNamedValue(stmt.args[index].name, alloca);
+        typesScopeStack.top()[stmt.args[index].name] = stmt.args[index].type;
+        index++;
     }
 
-    for (const auto& stmt : stmt.block) generateStmt(*stmt);
+    for (const auto& s : stmt.block) generateStmt(*s);
 
-    llvm::BasicBlock* currentBlock = builder.GetInsertBlock();
-    if (currentBlock != nullptr && currentBlock->getTerminator() == nullptr)
+    if (builder.GetInsertBlock()->getTerminator() == nullptr)
     {
-        if (funcType->getReturnType()->isVoidTy()) builder.CreateRetVoid();
-        else builder.CreateRet(llvm::Constant::getNullValue(funcType->getReturnType()));
+        llvm::Type* retTy = stmt.retType.type == TypeValue::VOID ? llvm::Type::getVoidTy(context) : getLLVMType(stmt.retType);
+        if (retTy->isVoidTy()) builder.CreateRetVoid();
+        else builder.CreateRet(llvm::UndefValue::get(retTy));
     }
 
     popScope();
-
-    builder.ClearInsertionPoint();
 }
 
 void CodeGenerator::generateFuncCallStmt(const AST::FuncCallStmt& stmt)
 {
-    llvm::Function* callee = module->getFunction(stmt.name);
-    if (callee == nullptr) throw std::runtime_error("Function '" + stmt.name + "' does not exists");
-
     std::vector<llvm::Value*> argValues;
     argValues.reserve(stmt.args.size());
-    for (size_t i = 0; i < stmt.args.size(); ++i)
+    for (const auto& arg : stmt.args) argValues.push_back(generateExpr(*arg));
+
+    auto it = functions.find(stmt.name);
+    if (it == functions.end())
     {
-        llvm::Value* val = generateExpr(*stmt.args[i]);
-        llvm::Type* expected = callee->getFunctionType()->getParamType(i);
-        argValues.push_back(castToExpectedIfNeeded(val, expected));
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                auto methIt = classIt->second.methods.find(stmt.name);
+                if (methIt != classIt->second.methods.end())
+                {
+                    for (llvm::Function* method : methIt->second)
+                    {
+                        auto* fnty = method->getFunctionType();
+                        if (fnty->getNumParams() != argValues.size() + 1) continue;
+
+                        std::vector<llvm::Value*> args;
+                        args.reserve(argValues.size() + 1);
+                        llvm::Value* thisPtr = getNamedValue("this");
+                        if (!thisPtr) throw std::runtime_error("'this' not available in method");
+                        args.push_back(thisPtr);
+
+                        bool ok = true;
+                        for (size_t i = 0; i < argValues.size(); i++)
+                        {
+                            llvm::Type* expected = fnty->getParamType(static_cast<unsigned>(i + 1));
+                            llvm::Value* value = argValues[i];
+                            if (!expected->isPointerTy()) value = castToExpectedIfNeeded(value, expected);
+                            
+                            if (value->getType() != expected) { ok = false; break; }
+
+                            args.push_back(value);
+                        }
+
+                        if (!ok) continue;
+
+                        builder.CreateCall(method, args);
+                        
+                        return;
+                    }
+                }
+            }
+        }
+
+        throw std::runtime_error("Function not declared: " + stmt.name);
     }
 
-    builder.CreateCall(callee, argValues, callee->getReturnType()->isVoidTy() ? "" : "calltmp");
+    const auto& overloads = it->second;
+    for (const auto& fn : overloads)
+    {
+        if (fn.args.size() != argValues.size()) continue;
+
+        std::vector<llvm::Value*> casted;
+        casted.reserve(argValues.size());
+        bool ok = true;
+        for (size_t i = 0; i < argValues.size(); i++)
+        {
+            llvm::Type* expected = getLLVMType(fn.args[i].type);
+            llvm::Value* value = argValues[i];
+
+            if (value->getType() == expected) { casted.push_back(value); continue; }
+            if (expected->isPointerTy() && value->getType()->isPointerTy()) { ok = false; break; }
+
+            value = castToExpectedIfNeeded(value, expected);
+
+            if (value->getType() != expected) { ok = false; break; }
+
+            casted.push_back(value);
+        }
+
+        if (!ok) continue;
+
+        llvm::Function* callee = module->getFunction(fn.mangledName);
+
+        if (!callee) throw std::runtime_error("Function not declared: " + fn.mangledName);
+
+        builder.CreateCall(callee, casted);
+        
+        return;
+    }
+
+    throw std::runtime_error("No matching overload found for function: " + stmt.name);
+}
+
+void CodeGenerator::generateMethodCallStmt(const AST::MethodCallStmt& stmt)
+{
+    AST::MethodCallExpr expr(std::unique_ptr<AST::Expr>(stmt.object->clone()), stmt.name, {});
+    expr.args.reserve(stmt.args.size());
+    for (const auto& a : stmt.args) expr.args.push_back(std::unique_ptr<AST::Expr>(a->clone()));
+    
+    generateMethodCallExpr(expr);
 }
 
 void CodeGenerator::generateReturnStmt(const AST::ReturnStmt& stmt)
@@ -280,8 +464,10 @@ void CodeGenerator::generateWhileLoopStmt(const AST::WhileLoopStmt& stmt)
     builder.SetInsertPoint(bodyBlock);
     loopBlocks.emplace(exitBlock, condBlock);
     pushScope();
+
     for (const auto& s : stmt.block) generateStmt(*s);
     if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(condBlock);
+
     popScope();
     loopBlocks.pop();
 
@@ -301,8 +487,10 @@ void CodeGenerator::generateDoWhileLoopStmt(const AST::DoWhileLoopStmt& stmt)
     builder.SetInsertPoint(bodyBlock);
     loopBlocks.emplace(exitBlock, condBlock);
     pushScope();
+
     for (const auto& s : stmt.block) generateStmt(*s);
     if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(condBlock);
+
     popScope();
     loopBlocks.pop();
 
@@ -354,8 +542,10 @@ void CodeGenerator::generateForLoopStmt(const AST::ForLoopStmt& stmt)
     builder.SetInsertPoint(bodyBlock);
     loopBlocks.emplace(exitBlock, iterationBlock);
     pushScope();
+
     for (const auto& s : stmt.block) generateStmt(*s);
     if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateBr(iterationBlock);
+
     popScope();
     loopBlocks.pop();
 
@@ -414,7 +604,12 @@ void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
 
         promoted = builder.CreateSelect(value, truePtr, falsePtr, "bool_str");
     }
-    else if (value->getType()->isPointerTy()) formatStr = "%s\n";
+    else if (value->getType()->isPointerTy())
+    {
+        formatStr = "%s\n";
+        llvm::Value* emptyPtr = builder.CreateGlobalString("", "empty_str");
+        promoted = builder.CreateSelect(builder.CreateICmpNE(value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(value->getType()))), value, emptyPtr);
+    }
     else formatStr = "%d\n";
     
     llvm::GlobalVariable* formatGV = builder.CreateGlobalString(formatStr, "printf_format");
@@ -452,8 +647,48 @@ void CodeGenerator::generateClassDeclStmt(const AST::ClassDeclStmt& stmt)
     classInfo.type = llvm::StructType::create(context, fieldTypes, stmt.name);
     classes[stmt.name] = classInfo;
 
+    {
+        std::vector<llvm::Type*> constructorArgs = {llvm::PointerType::get(classInfo.type, 0)};
+        llvm::FunctionType* constructorType = llvm::FunctionType::get(llvm::Type::getVoidTy(context), constructorArgs, false);
+        llvm::Function* constructor = llvm::Function::Create(constructorType, llvm::Function::ExternalLinkage, stmt.name + "_constructor", *module);
+        classes[stmt.name].constructors.push_back(constructor);
+
+        llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", constructor);
+        builder.SetInsertPoint(entry);
+
+        llvm::Argument* thisArg = &constructor->arg_begin()[0];
+        thisArg->setName("this");
+
+        for (const auto& member : stmt.members)
+        {
+            if (auto field = dynamic_cast<AST::FieldMember*>(member.get()))
+            {
+                int fieldIndex = classInfo.fieldIndices[field->name];
+                llvm::Value* gep = builder.CreateStructGEP(classInfo.type, thisArg, fieldIndex, field->name + ".addr");
+                llvm::Type* fieldTy = classInfo.type->getElementType(fieldIndex);
+
+                llvm::Value* initValue = nullptr;
+                if (field->expr) initValue = generateExpr(*field->expr);
+                else
+                {
+                    if (field->type.type == TypeValue::STRING) initValue = builder.CreateGlobalString("", "empty_str");
+                    else initValue = llvm::Constant::getNullValue(fieldTy);
+                }
+
+                if (!fieldTy->isPointerTy()) initValue = castToExpectedIfNeeded(initValue, fieldTy);
+
+                builder.CreateStore(initValue, gep);
+            }
+        }
+        
+        builder.CreateRetVoid();
+    }
+
     for (const auto& member : stmt.members)
+    {
         if (auto method = dynamic_cast<AST::MethodMember*>(member.get())) generateMethodDeclStmt(*method);
+        else if (auto ctor = dynamic_cast<AST::ConstructorMember*>(member.get())) generateConstructorDecl(*ctor);
+    }
 
     classesStack.pop();
 }
@@ -468,9 +703,9 @@ void CodeGenerator::generateMethodDeclStmt(const AST::MethodMember& stmt)
 
     llvm::FunctionType* funcType = llvm::FunctionType::get(getLLVMType(stmt.retType), argTypes, false);
 
-    llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, classesStack.top() + "_" + stmt.name, *module);
+    llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, classesStack.top() + std::string("_") + stmt.name, *module);
 
-    classes[classesStack.top()].methods[stmt.name] = func;
+    classes[classesStack.top()].methods[stmt.name].push_back(func);
 
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", func);
     builder.SetInsertPoint(entry);
@@ -480,11 +715,12 @@ void CodeGenerator::generateMethodDeclStmt(const AST::MethodMember& stmt)
     llvm::Argument* thisArg = &func->arg_begin()[0];
     thisArg->setName("this");
     setNamedValue("this", thisArg);
+    typesScopeStack.top()["this"] = Type(TypeValue::CLASS, classesStack.top());
 
     auto argIt = func->arg_begin();
     std::advance(argIt, 1);
 
-    for (size_t i = 0; i < stmt.args.size() && argIt != func->arg_end(); ++i, ++argIt)
+    for (size_t i = 0; i < stmt.args.size() && argIt != func->arg_end(); i++, argIt++)
     {
         llvm::Argument& arg = *argIt;
         arg.setName(stmt.args[i].name);
@@ -493,9 +729,17 @@ void CodeGenerator::generateMethodDeclStmt(const AST::MethodMember& stmt)
         
         builder.CreateStore(&arg, alloca);
         setNamedValue(stmt.args[i].name, alloca);
+        typesScopeStack.top()[stmt.args[i].name] = stmt.args[i].type;
     }
 
     for (const auto& stmt : stmt.block) generateStmt(*stmt);
+
+    if (builder.GetInsertBlock()->getTerminator() == nullptr)
+    {
+        llvm::Type* retTy = stmt.retType.type == TypeValue::VOID ? llvm::Type::getVoidTy(context) : getLLVMType(stmt.retType);
+        if (retTy->isVoidTy()) builder.CreateRetVoid();
+        else builder.CreateRet(llvm::UndefValue::get(retTy));
+    }
 
     popScope();
 }
@@ -508,6 +752,9 @@ llvm::Value* CodeGenerator::generateExpr(const AST::Expr& expr)
     else if (auto var = dynamic_cast<const AST::VarExpr*>(&expr)) return generateVarExpr(*var);
     else if (auto func = dynamic_cast<const AST::FuncCallExpr*>(&expr)) return generateFuncCallExpr(*func);
     else if (auto n = dynamic_cast<const AST::NewExpr*>(&expr)) return generateNewExpr(*n);
+    else if (auto f = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return generateFieldAccessExpr(*f);
+    else if (auto m = dynamic_cast<const AST::MethodCallExpr*>(&expr)) return generateMethodCallExpr(*m);
+    else if (auto t = dynamic_cast<const AST::ThisExpr*>(&expr)) return generateThisExpr(*t);
 
     throw std::runtime_error("Unknown expression type in generateExpr");
 }
@@ -540,7 +787,42 @@ llvm::Value* CodeGenerator::generateBinaryExpr(const AST::BinaryExpr& binaryExpr
     switch (binaryExpr.op)
     {
         case TokenType::PLUS: 
-            if (left->getType()->isIntegerTy()) return builder.CreateAdd(left, right, "addtmp");
+            if (left->getType()->isPointerTy() && right->getType()->isPointerTy())
+            {
+                llvm::Function* strcatFunc = module->getFunction("strcat");
+                if (!strcatFunc)
+                {
+                    llvm::FunctionType* strcatType = llvm::FunctionType::get(
+                        llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0),
+                        {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), 
+                         llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)},
+                        false);
+                    strcatFunc = llvm::Function::Create(strcatType, llvm::Function::ExternalLinkage, "strcat", *module);
+                }
+                
+                llvm::Function* mallocFunc = module->getFunction("malloc");
+                if (!mallocFunc) throw std::runtime_error("malloc not available");
+                
+                llvm::Value* size = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 256);
+                llvm::Value* result = builder.CreateCall(mallocFunc, size, "concat_result");
+                
+                llvm::Function* strcpyFunc = module->getFunction("strcpy");
+                if (!strcpyFunc)
+                {
+                    llvm::FunctionType* strcpyType = llvm::FunctionType::get(
+                        llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0),
+                        {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), 
+                         llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)},
+                        false);
+                    strcpyFunc = llvm::Function::Create(strcpyType, llvm::Function::ExternalLinkage, "strcpy", *module);
+                }
+                
+                builder.CreateCall(strcpyFunc, {result, left});
+                builder.CreateCall(strcatFunc, {result, right});
+                
+                return result;
+            }
+            else if (left->getType()->isIntegerTy()) return builder.CreateAdd(left, right, "addtmp");
             else return builder.CreateFAdd(left, right, "addtmp");
         case TokenType::MINUS: 
             if (left->getType()->isIntegerTy()) return builder.CreateSub(left, right, "subtmp");
@@ -594,7 +876,31 @@ llvm::Value* CodeGenerator::generateUnaryExpr(const AST::UnaryExpr& unaryExpr)
 llvm::Value* CodeGenerator::generateVarExpr(const AST::VarExpr& varExpr)
 {
     llvm::Value* address = getNamedValue(varExpr.name);
-    if (address == nullptr) throw std::runtime_error("Variable '" + varExpr.name + "' does not exists");
+    if (address == nullptr) 
+    {
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                auto fieldIt = classIt->second.fieldIndices.find(varExpr.name);
+                if (fieldIt != classIt->second.fieldIndices.end())
+                {
+                    llvm::Value* thisPtr = getNamedValue("this");
+                    if (!thisPtr) throw std::runtime_error("'this' not available in method");
+                    
+                    int fieldIndex = fieldIt->second;
+                    llvm::Value* gep = builder.CreateStructGEP(classIt->second.type, thisPtr, fieldIndex, varExpr.name + ".addr");
+                    llvm::Type* fieldTy = classIt->second.type->getElementType(fieldIndex);
+
+                    return builder.CreateLoad(fieldTy, gep, varExpr.name);
+                }
+            }
+        }
+
+        throw std::runtime_error("Variable '" + varExpr.name + "' does not exists");
+    }
 
     llvm::Type* valueType = nullptr;
     if (auto* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(address)) valueType = allocaInst->getAllocatedType();
@@ -606,23 +912,147 @@ llvm::Value* CodeGenerator::generateVarExpr(const AST::VarExpr& varExpr)
 
 llvm::Value* CodeGenerator::generateFuncCallExpr(const AST::FuncCallExpr& funcExpr)
 {
-    llvm::Function* callee = module->getFunction(funcExpr.name);
-    if (callee == nullptr) throw std::runtime_error("Function '" + funcExpr.name + "' does not exists");
-
     std::vector<llvm::Value*> argValues;
     argValues.reserve(funcExpr.args.size());
-    for (size_t i = 0; i < funcExpr.args.size(); ++i)
+    for (const auto& arg : funcExpr.args) argValues.push_back(generateExpr(*arg));
+
+    auto it = functions.find(funcExpr.name);
+    if (it == functions.end())
     {
-        llvm::Value* val = generateExpr(*funcExpr.args[i]);
-        llvm::Type* expected = callee->getFunctionType()->getParamType(i);
-        argValues.push_back(castToExpectedIfNeeded(val, expected));
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                auto methIt = classIt->second.methods.find(funcExpr.name);
+                if (methIt != classIt->second.methods.end())
+                {
+                    for (llvm::Function* method : methIt->second)
+                    {
+                        auto* fnty = method->getFunctionType();
+                        if (fnty->getNumParams() != argValues.size() + 1) continue;
+
+                        std::vector<llvm::Value*> args;
+                        args.reserve(argValues.size() + 1);
+                        llvm::Value* thisPtr = getNamedValue("this");
+                        if (!thisPtr) throw std::runtime_error("'this' not available in method");
+                        args.push_back(thisPtr);
+
+                        bool ok = true;
+                        for (size_t i = 0; i < argValues.size(); i++)
+                        {
+                            llvm::Type* expected = fnty->getParamType(static_cast<unsigned>(i + 1));
+                            llvm::Value* value = argValues[i];
+                            if (!expected->isPointerTy()) value = castToExpectedIfNeeded(value, expected);
+
+                            if (value->getType() != expected) { ok = false; break; }
+                            
+                            args.push_back(value);
+                        }
+
+                        if (!ok) continue;
+
+                        return builder.CreateCall(method, args);
+                    }
+                }
+            }
+        }
+        
+        throw std::runtime_error("Function not declared: " + funcExpr.name);
     }
 
-    llvm::Value* call = builder.CreateCall(callee, argValues, callee->getReturnType()->isVoidTy() ? "" : "calltmp");
-    
-    if (callee->getReturnType()->isVoidTy()) return nullptr;
-    
-    return call;
+    const auto& overloads = it->second;
+    for (const auto& fn : overloads)
+    {
+        if (fn.args.size() != argValues.size()) continue;
+
+        std::vector<llvm::Value*> casted;
+        casted.reserve(argValues.size());
+        
+        bool ok = true;
+        for (size_t i = 0; i < argValues.size(); i++)
+        {
+            llvm::Type* expected = getLLVMType(fn.args[i].type);
+            llvm::Value* value = argValues[i];
+
+            if (value->getType() == expected) { casted.push_back(value); continue; }
+            if (expected->isPointerTy() && value->getType()->isPointerTy()) { ok = false; break; }
+
+            value = castToExpectedIfNeeded(value, expected);
+            
+            if (value->getType() != expected) { ok = false; break; }
+
+            casted.push_back(value);
+        }
+        
+        if (!ok) continue;
+
+        llvm::Function* callee = module->getFunction(fn.mangledName);
+        if (!callee) throw std::runtime_error("Function not declared: " + fn.mangledName);
+
+        return builder.CreateCall(callee, casted);
+    }
+
+    throw std::runtime_error("No matching overload found for function: " + funcExpr.name);
+}
+
+std::string CodeGenerator::mangleFunction(const std::string& name, const AST::Arguments& args) const
+{
+    std::vector<Type> ts; ts.reserve(args.size());
+    for (const auto& a : args) ts.push_back(a.type);
+
+    return mangleFunction(name, ts);
+}
+
+std::string CodeGenerator::mangleFunction(const std::string& name, const std::vector<Type>& types) const
+{
+    std::string mangled = name + "__";
+
+    for (size_t i = 0; i < types.size(); i++)
+    {
+        const Type& t = types[i];
+        switch (t.type)
+        {
+            case TypeValue::INT: mangled += "i"; break;
+            case TypeValue::FLOAT: mangled += "f"; break;
+            case TypeValue::DOUBLE: mangled += "d"; break;
+            case TypeValue::CHAR: mangled += "c"; break;
+            case TypeValue::BOOL: mangled += "b"; break;
+            case TypeValue::STRING: mangled += "s"; break;
+            case TypeValue::VOID: mangled += "v"; break;
+            case TypeValue::CLASS: mangled += std::string("C") + t.name; break;
+            default: mangled += "u"; break;
+        }
+
+        if (i + 1 < types.size()) mangled += "_";
+    }
+
+    return mangled;
+}
+
+llvm::Function* CodeGenerator::declareFunctionPrototype(const AST::FuncDeclStmt& stmt)
+{
+    std::string funcName = (stmt.name == "main") ? std::string("main") : mangleFunction(stmt.name, stmt.args);
+    if (llvm::Function* existing = module->getFunction(funcName)) return existing;
+
+    std::vector<llvm::Type*> argTypes;
+    argTypes.reserve(stmt.args.size());
+    for (const auto& arg : stmt.args) argTypes.push_back(getLLVMType(arg.type));
+
+    llvm::FunctionType* funcType = llvm::FunctionType::get(getLLVMType(stmt.retType), argTypes, false);
+    llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, funcName, *module);
+
+    FunctionInfo info
+    {
+        .returnType = stmt.retType,
+        .args = stmt.args,
+        .mangledName = funcName,
+        .function = func,
+    };
+    functions[stmt.name].push_back(std::move(info));
+
+    return func;
 }
 
 llvm::Value* CodeGenerator::generateNewExpr(const AST::NewExpr& expr)
@@ -634,36 +1064,153 @@ llvm::Value* CodeGenerator::generateNewExpr(const AST::NewExpr& expr)
     llvm::Value* size = llvm::ConstantExpr::getSizeOf(classInfo.type);
 
     llvm::Function* mallocFunc = module->getFunction("malloc");
-    if (!mallocFunc) {
-        throw std::runtime_error("Failed to declare malloc");
-    }
+    if (!mallocFunc) throw std::runtime_error("Failed to declare malloc");
     
     llvm::Value* allocated = builder.CreateCall(mallocFunc, size, "new");
     
     llvm::Type* targetType = llvm::PointerType::get(classInfo.type, 0);
-    return builder.CreateBitCast(allocated, targetType);
+    llvm::Value* object = builder.CreateBitCast(allocated, targetType);
+    
+    if (llvm::Function* defaultConstrutor = module->getFunction(expr.name + std::string("_constructor")))
+        builder.CreateCall(defaultConstrutor, {object});
+
+    std::vector<llvm::Value*> argValues;
+    argValues.reserve(expr.args.size());
+    for (const auto& arg : expr.args) argValues.push_back(generateExpr(*arg));
+
+    for (llvm::Function* constructor : classInfo.constructors)
+    {
+        if (constructor->getName() == expr.name + std::string("_constructor")) continue;
+
+        auto* fnty = constructor->getFunctionType();
+        if (fnty->getNumParams() != argValues.size() + 1) continue;
+
+        std::vector<llvm::Value*> casted;
+        casted.reserve(argValues.size() + 1);
+        casted.push_back(object);
+
+        bool ok = true;
+        for (size_t i = 0; i < argValues.size(); i++)
+        {
+            llvm::Type* expected = fnty->getParamType(static_cast<unsigned>(i + 1));
+            llvm::Value* value = argValues[i];
+            if (!expected->isPointerTy()) value = castToExpectedIfNeeded(value, expected);
+            
+            if (value->getType() != expected) { ok = false; break; }
+
+            casted.push_back(value);
+        }
+
+        if (!ok) continue;
+
+        builder.CreateCall(constructor, casted);
+        
+        break;
+    }
+    
+    return object;
 }
 
-/* llvm::Value* CodeGenerator::generateFieldAccessExpr(const AST::FieldAccessExpr& expr)
+llvm::Value* CodeGenerator::generateFieldAccessExpr(const AST::FieldAccessExpr& expr)
 {
     llvm::Value* object = generateExpr(*expr.object);
-    ClassInfo& classInfo = classes[];
-    int fieldIndex = classInfo.fieldIndices[expr.name];
-    return builder.CreateStructGEP(classInfo.type, object, fieldIndex);
+
+    std::string className = resolveClassName(*expr.object);
+    auto it = classes.find(className);
+    if (it == classes.end()) throw std::runtime_error("Class not found: " + className);
+
+    auto fldIt = it->second.fieldIndices.find(expr.name);
+    if (fldIt == it->second.fieldIndices.end()) throw std::runtime_error("Field not found: " + expr.name);
+
+    int fieldIndex = fldIt->second;
+    llvm::Value* gep = builder.CreateStructGEP(it->second.type, object, fieldIndex, expr.name + ".addr");
+    llvm::Type* fieldTy = it->second.type->getElementType(fieldIndex);
+
+    return builder.CreateLoad(fieldTy, gep, expr.name);
 }
 
 llvm::Value* CodeGenerator::generateMethodCallExpr(const AST::MethodCallExpr& expr)
 {
-    llvm::Value* object = generateExpr(*expr.object);
-    std::string className = ;
-    llvm::Function* method = classes[className].methods[expr.name];
+    llvm::Value* object = nullptr;
+    if (auto field = dynamic_cast<const AST::FieldAccessExpr*>(expr.object.get())) object = generateExpr(*field->object);
+    else object = generateExpr(*expr.object);
     
-    std::vector<llvm::Value*> args;
-    args.push_back(object);
-    for (const auto& arg : expr.args) args.push_back(generateExpr(*arg));
-    
-    return builder.CreateCall(method, args);
-} */
+    std::string className = resolveClassName(*expr.object);
+
+    auto it = classes.find(className);
+    if (it == classes.end()) throw std::runtime_error("Class not found: " + className);
+
+    auto methIt = it->second.methods.find(expr.name);
+    if (methIt == it->second.methods.end()) throw std::runtime_error("Method not found: " + expr.name);
+
+    // Try overloads
+    for (llvm::Function* method : methIt->second)
+    {
+        auto* fnty = method->getFunctionType();
+        if (fnty->getNumParams() != expr.args.size() + 1) continue;
+
+        std::vector<llvm::Value*> args;
+        args.reserve(expr.args.size() + 1);
+        args.push_back(object);
+
+        bool ok = true;
+        for (size_t i = 0; i < expr.args.size(); i++)
+        {
+            llvm::Value* val = generateExpr(*expr.args[i]);
+            llvm::Type* expected = fnty->getParamType(static_cast<unsigned>(i + 1));
+            if (!expected->isPointerTy()) val = castToExpectedIfNeeded(val, expected);
+            if (val->getType() != expected) { ok = false; break; }
+            args.push_back(val);
+        }
+
+        if (!ok) continue;
+
+        return builder.CreateCall(method, args);
+    }
+
+    throw std::runtime_error("No matching overload found for method: " + expr.name);
+}
+
+void CodeGenerator::generateConstructorDecl(const AST::ConstructorMember& ctor)
+{
+    std::vector<llvm::Type*> argTypes;
+    argTypes.push_back(llvm::PointerType::get(classes[classesStack.top()].type, 0));
+    for (const auto& a : ctor.args) argTypes.push_back(getLLVMType(a.type));
+
+    std::string baseName = classesStack.top() + std::string("_constructor");
+    std::string mangled = mangleFunction(baseName, ctor.args);
+
+    llvm::FunctionType* fnty = llvm::FunctionType::get(llvm::Type::getVoidTy(context), argTypes, false);
+    llvm::Function* fn = llvm::Function::Create(fnty, llvm::Function::ExternalLinkage, mangled, *module);
+    classes[classesStack.top()].constructors.push_back(fn);
+
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", fn);
+    builder.SetInsertPoint(entry);
+
+    pushScope();
+
+    llvm::Argument* thisArg = &fn->arg_begin()[0];
+    thisArg->setName("this");
+    setNamedValue("this", thisArg);
+    typesScopeStack.top()["this"] = Type(TypeValue::CLASS, classesStack.top());
+
+    auto it = fn->arg_begin();
+    std::advance(it, 1);
+    for (size_t i = 0; i < ctor.args.size() && it != fn->arg_end(); i++, it++)
+    {
+        llvm::Argument& arg = *it; arg.setName(ctor.args[i].name);
+        llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, ctor.args[i].name + ".addr");
+        builder.CreateStore(&arg, alloca);
+        setNamedValue(ctor.args[i].name, alloca);
+        typesScopeStack.top()[ctor.args[i].name] = ctor.args[i].type;
+    }
+
+    for (const auto& s : ctor.block) generateStmt(*s);
+
+    if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateRetVoid();
+
+    popScope();
+}
 
 llvm::Value* CodeGenerator::generateThisExpr(const AST::ThisExpr&)
 {

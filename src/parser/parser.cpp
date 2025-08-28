@@ -1,9 +1,6 @@
 #include "../../include/parser/parser.hpp"
 #include <memory>
 #include <stdexcept>
-#include <string>
-#include <utility>
-#include <vector>
 
 std::vector<AST::StmtPtr> Parser::parse()
 {
@@ -21,8 +18,11 @@ AST::StmtPtr Parser::parseStmt()
     else if (match(TokenType::IDENTIFIER))
     {
         if (peek().type == TokenType::LPAREN) return parseFuncCallStmt();
+        else if (peek().type == TokenType::NEXT) return parseObjectChainStmt();
+        
         return parseVarAsgnStmt(false);
     }
+    else if (match(TokenType::THIS)) return parseThisStmt();
     else if (match(TokenType::RETURN)) return parseReturnStmt();
     else if (match(TokenType::IF)) return parseIfElseStmt();
     else if (match(TokenType::WHILE)) return parseWhileLoopStmt();
@@ -40,9 +40,8 @@ AST::StmtPtr Parser::parseVarDeclStmt()
     Type type = consumeType();
     Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
 
-    consume(TokenType::ASSIGN, "Expected '='");
-
-    AST::ExprPtr expr = parseExpr();
+    AST::ExprPtr expr = nullptr;
+    if (match(TokenType::ASSIGN)) expr = parseExpr();
     consume(TokenType::SEMICOLON, "Expected ';'");
 
     return std::make_unique<AST::VarDeclStmt>(id.value, type, std::move(expr));
@@ -85,10 +84,80 @@ AST::StmtPtr Parser::parseFuncCallStmt()
         args.push_back(parseExpr());
         if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
     }
-
+    
     consume(TokenType::SEMICOLON, "Expected ';'");
-
+    
     return std::make_unique<AST::FuncCallStmt>(id.value, std::move(args));
+}
+
+AST::StmtPtr Parser::parseThisStmt()
+{
+    if (peek().type != TokenType::NEXT) throw std::runtime_error("Unexpected token after 'this' in statement");
+
+    AST::ExprPtr base = std::make_unique<AST::ThisExpr>(nullptr);
+    AST::ExprPtr object = parseCallsChain(std::move(base));
+
+    if (peek().type == TokenType::ASSIGN)
+    {
+        Token fieldName = peek(-1);
+        
+        consume(TokenType::ASSIGN, "Expected '='");
+        
+        AST::ExprPtr expr = parseExpr();
+        
+        consume(TokenType::SEMICOLON, "Expected ';'");
+        
+        AST::ExprPtr target = std::make_unique<AST::ThisExpr>(nullptr);
+
+        return std::make_unique<AST::FieldAsgnStmt>(std::move(target), std::move(object), fieldName.value, std::move(expr));
+    }
+
+    if (auto call = dynamic_cast<AST::MethodCallExpr*>(object.get()))
+    {
+        AST::ExprPtr objExpr = std::move(call->object);
+        std::string name = call->name;
+        std::vector<AST::ExprPtr> args;
+        for (auto& a : call->args) args.push_back(std::move(a));
+        
+        consume(TokenType::SEMICOLON, "Expected ';'");
+        
+        return std::make_unique<AST::MethodCallStmt>(std::move(objExpr), name, std::move(args));
+    }
+
+    throw std::runtime_error("Only field assignment or method call are allowed after 'this' in statement");
+}
+
+AST::StmtPtr Parser::parseObjectChainStmt()
+{
+    Token id = peek(-1);
+
+    AST::ExprPtr target = std::make_unique<AST::VarExpr>(id.value);
+    AST::ExprPtr object = parseCallsChain(std::make_unique<AST::VarExpr>(id.value));
+    
+    if (match(TokenType::ASSIGN))
+    {
+        Token fieldName = peek(-2);
+
+        AST::ExprPtr expr = parseExpr();
+        
+        consume(TokenType::SEMICOLON, "Expected ';'");
+
+        return std::make_unique<AST::FieldAsgnStmt>(std::move(target), std::move(object), fieldName.value, std::move(expr));
+    }
+    
+    if (auto call = dynamic_cast<AST::MethodCallExpr*>(object.get()))
+    {
+        AST::ExprPtr objExpr = std::move(call->object);
+        std::string name = call->name;
+        std::vector<AST::ExprPtr> args;
+        for (auto& a : call->args) args.push_back(std::move(a));
+        
+        consume(TokenType::SEMICOLON, "Expected ';'");
+        
+        return std::make_unique<AST::MethodCallStmt>(std::move(objExpr), name, std::move(args));
+    }
+    
+    throw std::runtime_error("Object chain must be field assignment or method call statement");
 }
 
 AST::StmtPtr Parser::parseVarAsgnStmt(bool fromForLoop)
@@ -175,7 +244,7 @@ AST::StmtPtr Parser::parseForLoopStmt()
 
     consume(TokenType::SEMICOLON, "Expected ';'");
 
-    pos++;  // skip identifier;
+    pos++;  // skip identifier
     AST::StmtPtr iterationStmt = parseVarAsgnStmt(true);
 
     consume(TokenType::RPAREN, "Expected ')'");
@@ -215,8 +284,9 @@ AST::StmtPtr Parser::parseClassDeclStmt()
         if (match(TokenType::PUBLIC)) access = AST::AccessModifier::PUBLIC;
         else if (match(TokenType::PRIVATE)) {}
 
-        if (match(TokenType::VAR)) members.push_back(parseFieldDecl(access));
-        else if (match(TokenType::FUNC)) members.push_back(parseMethodDecl(access));
+        if (match(TokenType::VAR)) members.push_back(std::move(parseFieldDecl(access)));
+        else if (match(TokenType::FUNC)) members.push_back(std::move(parseMethodDecl(access)));
+        else if (match(TokenType::CONSTRUCTOR)) members.push_back(std::move(parseConstructorDecl(access)));
         else throw std::runtime_error("Unsupported class member declaration: '" + peek().value + "'");
     }
 
@@ -228,9 +298,8 @@ std::unique_ptr<AST::Member> Parser::parseFieldDecl(AST::AccessModifier& access)
     Type type = consumeType();
     Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
 
-    consume(TokenType::ASSIGN, "Expected '='");
-
-    AST::ExprPtr expr = parseExpr();
+    AST::ExprPtr expr = nullptr;
+    if (match(TokenType::ASSIGN)) expr = parseExpr();
 
     consume(TokenType::SEMICOLON, "Expected ';'");
     
@@ -263,6 +332,26 @@ std::unique_ptr<AST::Member> Parser::parseMethodDecl(AST::AccessModifier& access
     return std::make_unique<AST::MethodMember>(access, id.value, retType, std::move(args), std::move(block));
 }
 
+std::unique_ptr<AST::Member> Parser::parseConstructorDecl(AST::AccessModifier& access)
+{
+    consume(TokenType::LPAREN, "Expected '('");
+    AST::Arguments args;
+    while (!match(TokenType::RPAREN))
+    {
+        Type aType = consumeType();
+        Token aName = consume(TokenType::IDENTIFIER, "Expected identificator");
+        args.push_back(AST::Argument(aType, aName.value));
+
+        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
+    }
+
+    consume(TokenType::LBRACE, "Expected '{'");
+    AST::Block block;
+    while (!match(TokenType::RBRACE)) block.push_back(parseStmt());
+
+    return std::make_unique<AST::ConstructorMember>(access, std::move(args), std::move(block));
+}
+
 AST::StmtPtr Parser::parseEchoStmt()
 {
     AST::ExprPtr expr = parseExpr();
@@ -281,6 +370,7 @@ Type Parser::consumeType()
         case TokenType::DOUBLE: pos++; return Type(TypeValue::DOUBLE, "double");
         case TokenType::CHAR: pos++; return Type(TypeValue::CHAR, "char");
         case TokenType::BOOL: pos++; return Type(TypeValue::BOOL, "bool");
+        case TokenType::STRING: pos++; return Type(TypeValue::STRING, "string");
         case TokenType::VOID: pos++; return Type(TypeValue::VOID, "void");
         case TokenType::IDENTIFIER: pos++; return Type(TypeValue::CLASS, t.value);
         default: throw std::runtime_error("Unsupported type: '" + t.value + "'" + " -> " + std::to_string(t.line) + ":" + std::to_string(t.column));
@@ -398,19 +488,14 @@ AST::ExprPtr Parser::parseUnary()
 
 AST::ExprPtr Parser::parsePrimary()
 {
-    if (match(TokenType::NEW))
-    {
-        Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
-        consume(TokenType::LPAREN, "Expected '('");
-        
-        std::vector<AST::ExprPtr> args;
-        while (!match(TokenType::RPAREN))
-        {
-            args.push_back(parseExpr());
-            if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
-        }
+    if (match(TokenType::NEW)) return parseNewExpr();
 
-        return std::make_unique<AST::NewExpr>(id.value, std::move(args));
+    if (match(TokenType::THIS))
+    {
+        AST::ExprPtr expr = parseThisExpr();
+        if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+        
+        return expr;
     }
     
     if (match(TokenType::LPAREN))
@@ -421,11 +506,12 @@ AST::ExprPtr Parser::parsePrimary()
         return expr;
     }
 
-    Token c = peek();
+    Token token = peek();
 
-    switch (c.type)
+    switch (token.type)
     {
         case TokenType::IDENTIFIER:
+        {
             pos++;
             if (match(TokenType::LPAREN))
             {
@@ -436,31 +522,90 @@ AST::ExprPtr Parser::parsePrimary()
                     if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
                 }
 
-                return std::make_unique<AST::FuncCallExpr>(c.value, std::move(args));
+                AST::ExprPtr expr = std::make_unique<AST::FuncCallExpr>(token.value, std::move(args));
+
+                if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+                return std::move(expr);
             }
 
-            return std::make_unique<AST::VarExpr>(c.value);
+            AST::ExprPtr expr = std::make_unique<AST::VarExpr>(token.value);
+            
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+            return expr;
+        }
         case TokenType::INT_LIT:
             pos++;
-            return std::make_unique<AST::IntLiteral>(std::stoi(c.value));
+            return std::make_unique<AST::IntLiteral>(std::stoi(token.value));
         case TokenType::FLOAT_LIT:
             pos++;
-            return std::make_unique<AST::FloatLiteral>(std::stof(c.value));
+            return std::make_unique<AST::FloatLiteral>(std::stof(token.value));
         case TokenType::DOUBLE_LIT:
             pos++;
-            return std::make_unique<AST::DoubleLiteral>(std::stod(c.value));
+            return std::make_unique<AST::DoubleLiteral>(std::stod(token.value));
         case TokenType::CHAR_LIT:
             pos++;
-            return std::make_unique<AST::CharLiteral>(c.value[0]);
+            return std::make_unique<AST::CharLiteral>(token.value[0]);
         case TokenType::BOOL_LIT:
             pos++;
-            return std::make_unique<AST::BoolLiteral>(c.value == "false" ? false : true);
+            return std::make_unique<AST::BoolLiteral>(token.value == "false" ? false : true);
         case TokenType::STRING_LIT:
             pos++;
-            return std::make_unique<AST::StringLiteral>(c.value);
+            return std::make_unique<AST::StringLiteral>(token.value);
         default:
-            throw std::runtime_error("Unexpected token: '" + c.value + "'" + " -> " + std::to_string(c.line) + ":" + std::to_string(c.column));
+            throw std::runtime_error("Unexpected token: '" + token.value + "'" + " -> " + std::to_string(token.line) + ":" + std::to_string(token.column));
     }
+}
+
+AST::ExprPtr Parser::parseNewExpr()
+{
+    Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+    consume(TokenType::LPAREN, "Expected '('");
+    
+    std::vector<AST::ExprPtr> args;
+    while (!match(TokenType::RPAREN))
+    {
+        args.push_back(parseExpr());
+        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
+    }
+
+    return std::make_unique<AST::NewExpr>(id.value, std::move(args));
+}
+
+AST::ExprPtr Parser::parseCallsChain(AST::ExprPtr expr)
+{
+    while (match(TokenType::NEXT))
+    {
+        Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+
+        if (match(TokenType::LPAREN)) expr = parseMethodCallExpr(std::move(expr), id.value);
+        else expr = parseFieldAccessExpr(std::move(expr), id.value);
+    }
+
+    return std::move(expr);
+}
+
+AST::ExprPtr Parser::parseFieldAccessExpr(AST::ExprPtr obj, std::string& name)
+{
+    return std::make_unique<AST::FieldAccessExpr>(std::move(obj), name);
+}
+
+AST::ExprPtr Parser::parseMethodCallExpr(AST::ExprPtr obj, std::string& name)
+{
+    std::vector<AST::ExprPtr> args;
+    while (!match(TokenType::RPAREN))
+    {
+        args.push_back(parseExpr());
+        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
+    }
+    
+    return std::make_unique<AST::MethodCallExpr>(std::move(obj), name, std::move(args));
+}
+
+AST::ExprPtr Parser::parseThisExpr()
+{
+    return std::make_unique<AST::ThisExpr>(nullptr);
 }
 
 Token Parser::peek()
