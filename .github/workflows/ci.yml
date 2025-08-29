@@ -35,6 +35,9 @@ jobs:
           BUILD_PROJECT: llvm
           BUILD_MASTER: false
           LLVM_VERSION: 20.1.0
+          SCCACHE_DIR: C:\\Users\\runneradmin\\sccache
+          SCCACHE_CACHE_SIZE: 5G
+          CMAKE_COMPILER_LAUNCHER_FLAGS: -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       strategy:
           fail-fast: false
@@ -54,6 +57,19 @@ jobs:
       -   name: Checkout repo
           uses: actions/checkout@v3
 
+      -   name: Restore sccache cache
+          uses: actions/cache@v4
+          with:
+              path: |
+                  C:\\Users\\runneradmin\\sccache
+              key: ${{ runner.os }}-sccache-${{ env.LLVM_VERSION }}-${{ matrix.CRT }}-${{ matrix.TARGET_CPU }}-${{ matrix.CONFIGURATION }}
+
+      -   name: Install sccache and 7zip
+          shell: powershell
+          run: |
+              choco install sccache -y --no-progress
+              choco install 7zip -y --no-progress
+
       -   name: Install
           shell: cmd
           run: |
@@ -67,6 +83,10 @@ jobs:
               call %GITHUB_WORKSPACE%\set-env.bat msvc17 ${{matrix.CRT}} ${{matrix.TARGET_CPU}} ${{matrix.CONFIGURATION}}
               call %GITHUB_WORKSPACE%\build.bat
               echo ::set-output name=DEPLOY_FILE::%DEPLOY_FILE%
+
+      -   name: Show sccache stats
+          shell: powershell
+          run: sccache --show-stats || echo "sccache not available"
 
       -   name: Release
           uses: softprops/action-gh-release@v1
