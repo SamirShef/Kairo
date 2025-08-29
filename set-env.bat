@@ -84,7 +84,7 @@ set CMAKE_USE_ARCH_OPTIONS=true
 shift
 goto :loop
 
-::msvc17
+:msvc17
 set TOOLCHAIN=msvc17
 -if "%CMAKE_GENERATOR%" == "" set CMAKE_GENERATOR=Visual Studio 17 2022
 set CMAKE_USE_ARCH_OPTIONS=true
