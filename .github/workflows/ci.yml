@@ -71,12 +71,9 @@ jobs:
       -   name: Configure CMake (Release)
           shell: pwsh
           run: |
-              $cmakeDirs = Get-ChildItem -Path "C:\\llvm" -Recurse -Directory -Filter llvm -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName "LLVMConfig.cmake") -or Test-Path (Join-Path $_.FullName "llvm-config.cmake") }
-              if (-not $cmakeDirs) {
-                $cmakeDirs = Get-ChildItem -Path "C:\\llvm" -Recurse -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*cmake*\\llvm" }
-              }
-              if (-not $cmakeDirs) { throw "Failed to locate LLVM cmake directory under C:\\llvm" }
-              $env:LLVM_DIR = $cmakeDirs[0].FullName
+              $llvmConfig = Get-ChildItem -Path "C:\\llvm" -Recurse -Filter "LLVMConfig.cmake" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+              if (-not $llvmConfig) { throw "Failed to locate LLVMConfig.cmake under C:\\llvm" }
+              $env:LLVM_DIR = $llvmConfig.DirectoryName
               cmake -G Ninja -S . -B build `
                 -DCMAKE_BUILD_TYPE=Release `
                 -DLLVM_DIR=$env:LLVM_DIR `
