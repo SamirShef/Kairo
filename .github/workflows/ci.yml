@@ -12,6 +12,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ninja-build ccache
+
     - name: Install LLVM 20
       run: |
         wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
@@ -23,56 +28,63 @@ jobs:
       run: mkdir -p build
 
     - name: Configure CMake
-      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR=$(llvm-config-20 --cmakedir)
+      run: |
+        cmake -G Ninja -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_DIR=$(llvm-config-20 --cmakedir) \
+          -DCMAKE_C_COMPILER=clang-20 \
+          -DCMAKE_CXX_COMPILER=clang++-20 \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
     - name: Build
-      run: cmake --build build --config Release
+      run: cmake --build build --config Release -- -k 0
   
   windowsBuild:
       name: Windows Build
       runs-on: windows-2022
       env:
-          BUILD_PROJECT: llvm
-          BUILD_MASTER: false
-          LLVM_VERSION: 18.1.8
-
-      strategy:
-          fail-fast: false
-          matrix:
-              CRT:
-              -   msvcrt
-              -   libcmt
-
-              TARGET_CPU:
-              -   x86
-              -   amd64
-
-              CONFIGURATION:
-              -   Debug
-              -   Release
-
+          LLVM_VERSION: 20.1.0
+          SCCACHE_CACHE_SIZE: 5G
+          SCCACHE_DIR: C:\\Users\\runneradmin\\sccache
       steps:
       -   name: Checkout repo
-          uses: actions/checkout@v3
+          uses: actions/checkout@v4
 
-      -   name: Install
-          shell: cmd
+      -   name: Enable sccache
+          uses: mozilla-actions/sccache-action@v0.0.3
+
+      -   name: Install Ninja
+          shell: pwsh
+          run: choco install ninja --no-progress -y
+
+      -   name: Download LLVM ${{ env.LLVM_VERSION }} (prebuilt)
+          shell: pwsh
           run: |
-              call %GITHUB_WORKSPACE%\set-env.bat msvc17 ${{matrix.CRT}} ${{matrix.TARGET_CPU}} ${{matrix.CONFIGURATION}}
-              call %GITHUB_WORKSPACE%\install.bat
+              $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-${{ env.LLVM_VERSION }}/LLVM-${{ env.LLVM_VERSION }}-win64.exe"
+              $out = "$env:RUNNER_TEMP\llvm-${{ env.LLVM_VERSION }}.exe"
+              Invoke-WebRequest -Uri $url -OutFile $out
+              New-Item -ItemType Directory -Force -Path "C:\\llvm" | Out-Null
+              & 7z x $out -oC:\\llvm -y | Out-Null
+              echo "LLVM extracted to C:\\llvm"
 
-      -   name: Build and test
-          id: BUILD
-          shell: cmd
+      -   name: Configure CMake (Release)
+          shell: pwsh
           run: |
-              call %GITHUB_WORKSPACE%\set-env.bat msvc17 ${{matrix.CRT}} ${{matrix.TARGET_CPU}} ${{matrix.CONFIGURATION}}
-              call %GITHUB_WORKSPACE%\build.bat
-              echo ::set-output name=DEPLOY_FILE::%DEPLOY_FILE%
+              $cmakeDirs = Get-ChildItem -Path "C:\\llvm" -Recurse -Directory -Filter llvm -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName "LLVMConfig.cmake") -or Test-Path (Join-Path $_.FullName "llvm-config.cmake") }
+              if (-not $cmakeDirs) {
+                $cmakeDirs = Get-ChildItem -Path "C:\\llvm" -Recurse -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like "*cmake*\\llvm" }
+              }
+              if (-not $cmakeDirs) { throw "Failed to locate LLVM cmake directory under C:\\llvm" }
+              $env:LLVM_DIR = $cmakeDirs[0].FullName
+              cmake -G Ninja -S . -B build `
+                -DCMAKE_BUILD_TYPE=Release `
+                -DLLVM_DIR=$env:LLVM_DIR `
+                -DCMAKE_C_COMPILER=cl `
+                -DCMAKE_CXX_COMPILER=cl `
+                -DCMAKE_C_COMPILER_LAUNCHER=sccache `
+                -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
-      -   name: Release
-          uses: softprops/action-gh-release@v1
-          if: startsWith(github.ref, 'refs/tags/')
-          env:
-              GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
-          with:
-              files: ${{steps.BUILD.outputs.DEPLOY_FILE}}
+      -   name: Build
+          shell: pwsh
+          run: cmake --build build --config Release -- -k 0
