@@ -38,7 +38,6 @@ jobs:
           SCCACHE_DIR: C:\\Users\\runneradmin\\sccache
           SCCACHE_CACHE_SIZE: 5G
           CMAKE_COMPILER_LAUNCHER_FLAGS: -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          CMAKE_GENERATOR: Ninja
 
       strategy:
           fail-fast: false
@@ -65,11 +64,10 @@ jobs:
                   C:\\Users\\runneradmin\\sccache
               key: ${{ runner.os }}-sccache-${{ env.LLVM_VERSION }}-${{ matrix.CRT }}-${{ matrix.TARGET_CPU }}-${{ matrix.CONFIGURATION }}
 
-      -   name: Install sccache, ninja and 7zip
+      -   name: Install sccache and 7zip
           shell: powershell
           run: |
               choco install sccache -y --no-progress
-              choco install ninja -y --no-progress
               choco install 7zip -y --no-progress
 
       -   name: Install
