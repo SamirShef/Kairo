@@ -1,7 +1,7 @@
 # StageLang
 **Stage** - multi-paradigm programming language
 
-Compiler version: **v0.4** – C++ &amp; LLVM
+Compiler version: **v0.5** – C++ &amp; LLVM
 
 ## Installation (Linux)
 
@@ -88,6 +88,114 @@ sudo xargs -a build/install_manifest.txt -r rm -vf
 - Linker issues: ensure `clang` is installed and in PATH. You can override the linker used by the compiler with `STC_LINKER=clang`.
 - PATH not updated: after editing `~/.zshrc`, run `source ~/.zshrc` or restart the shell.
 
+## Installation (Windows)
+
+### 1) Install dependencies
+- **LLVM**: Download and install LLVM from [llvm.org](https://llvm.org/releases/) or use [winget](https://github.com/microsoft/winget-cli):
+  ```cmd
+  winget install LLVM.LLVM
+  ```
+- **CMake**: Download from [cmake.org](https://cmake.org/download/) or use winget:
+  ```cmd
+  winget install Kitware.CMake
+  ```
+- **Visual Studio Build Tools**: Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with C++ workload, or use winget:
+  ```cmd
+  winget install Microsoft.VisualStudio.2022.BuildTools
+  ```
+- **Ninja** (optional, for faster builds): Download from [ninja-build.org](https://ninja-build.org/) or use winget:
+  ```cmd
+  winget install Ninja-build.Ninja
+  ```
+
+### 2) Clone the repository
+```cmd
+git clone https://github.com/SamirShef/StageLang.git
+cd StageLang
+```
+
+### 3) Configure the build
+Open **Developer Command Prompt for VS 2022** or **x64 Native Tools Command Prompt** and navigate to the project directory:
+```cmd
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+```
+If using Ninja:
+```cmd
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+```
+
+If CMake cannot find LLVM, specify the LLVM installation path:
+```cmd
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="C:\Program Files\LLVM\lib\cmake\llvm"
+```
+
+### 4) Build
+```cmd
+cmake --build build --config Release
+```
+
+### 5) Install
+- **User-local** (recommended): installs `stc.exe` into `%USERPROFILE%\AppData\Local\Programs\StageLang`:
+  ```cmd
+  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%USERPROFILE%\AppData\Local\Programs\StageLang"
+  cmake --build build --config Release
+  cmake --install build
+  ```
+- **System-wide** (optional): installs into `C:\Program Files\StageLang`:
+  ```cmd
+  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="C:\Program Files\StageLang"
+  cmake --build build --config Release
+  cmake --install build
+  ```
+
+### 6) Add to PATH
+After installation, add the StageLang directory to your system PATH:
+
+**Option A: User PATH (recommended)**
+1. Press `Win + R`, type `sysdm.cpl`, press Enter
+2. Go to **Advanced** tab → **Environment Variables**
+3. Under **User variables**, find **Path** → **Edit**
+4. Click **New** and add: `%USERPROFILE%\AppData\Local\Programs\StageLang`
+5. Click **OK** on all dialogs
+
+**Option B: System PATH**
+1. Press `Win + R`, type `sysdm.cpl`, press Enter
+2. Go to **Advanced** tab → **Environment Variables**
+3. Under **System variables**, find **Path** → **Edit**
+4. Click **New** and add: `C:\Program Files\StageLang`
+5. Click **OK** on all dialogs
+
+**Option C: Command line (temporary)**
+```cmd
+set PATH=%PATH%;%USERPROFILE%\AppData\Local\Programs\StageLang
+```
+
+### 7) Verify installation
+Open a **new** Command Prompt or PowerShell and verify:
+```cmd
+stc --version
+stc examples\hello_world.st hello.exe
+hello.exe
+```
+
+### 8) Uninstall
+Keep the `build` directory after installation. To uninstall later:
+```cmd
+# User-local uninstall
+for /f "tokens=*" %i in (build\install_manifest.txt) do del "%i"
+
+# System-wide uninstall (run as Administrator)
+for /f "tokens=*" %i in (build\install_manifest.txt) do del "%i"
+```
+
+### Troubleshooting (Windows)
+- **LLVM not found**: Ensure LLVM is installed and specify the correct path with `-DLLVM_DIR`. Common paths:
+  - `C:\Program Files\LLVM\lib\cmake\llvm`
+  - `C:\Program Files (x86)\LLVM\lib\cmake\llvm`
+- **Build tools not found**: Install Visual Studio Build Tools with C++ workload
+- **PATH not updated**: Restart Command Prompt/PowerShell after adding to PATH
+- **Permission denied**: Run Command Prompt as Administrator for system-wide installation
+
 ## Types
 List of _primitive_ types:
 * int _(32 bits)_
@@ -149,6 +257,7 @@ List of statements:
 * [For loop](#for-loop)
 * [Echo](#echo-statement)
 * [Classes](#classes)
+* [Arrays](#arrays)
 
 > [!NOTE]
 > In the end all statements you must be add `;` character.
@@ -537,5 +646,65 @@ class Car
 >     }
 > }
 > ```
+
+## Arrays
+For array definition you need use keyword `var`, type, symbols `[]`, name and if you need an initializer in the form of `[<elements>]`, when `<elements>` are any comma-separated elements for initialization. You can create arrays of classes. For example:
+```C++
+func int main()
+{
+    var int[] numbers = [1, 2, 3, 4];
+    var string[] strs;  // empty array
+    
+    return 0;
+}
+```
+
+For get or assignment element from array you need use array name and index between brackets. For example:
+```C++
+func int main()
+{
+    var int[] numbers = [1, 2, 3, 4];
+    echo numbers[0];
+
+    numbers[0] = 10;
+
+    for (int i; i < 4; i += 1) echo numbers[i];
+    
+    return 0;
+}
+```
+
+You can assign another array to an array. For example:
+```C++
+func int main()
+{
+    var int[] numbers = [1, 2, 3, 4];
+    var int[] numbers2 = [4, 3, 2, 1];
+
+    numbers = numbers2;
+    numbers2 = [5, 6, 7, 8];
+    
+    return 0;
+}
+```
+
+You can return arrays in functions. For example:
+```C++
+fucn int[] genArr()
+{
+    return [1, 2, 3, 4, 5];
+}
+```
+
+You can specify an array as an argument to the function. Fox example:
+```C++
+func int test(int[] arr)
+{
+    // ...
+}
+```
+
+> [!WARNING]
+> You cannot to specify size of array.
 
 More examples you can see in `examples` directory.

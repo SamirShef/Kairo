@@ -1,5 +1,4 @@
 #include "../../include/parser/parser.hpp"
-#include <memory>
 #include <stdexcept>
 
 std::vector<AST::StmtPtr> Parser::parse()
@@ -19,6 +18,9 @@ AST::StmtPtr Parser::parseStmt()
     {
         if (peek().type == TokenType::LPAREN) return parseFuncCallStmt();
         else if (peek().type == TokenType::NEXT) return parseObjectChainStmt();
+        else if (peek().type == TokenType::LBRACKET) return parseVarAsgnStmt(false);
+        
+
         
         return parseVarAsgnStmt(false);
     }
@@ -37,14 +39,43 @@ AST::StmtPtr Parser::parseStmt()
 
 AST::StmtPtr Parser::parseVarDeclStmt()
 {
-    Type type = consumeType();
+    Type baseType = consumeType();
+    
+    if (peek().type == TokenType::LBRACKET)
+    {
+        auto [arrayType, size] = parseArrayType();
+        Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+        
+        AST::ExprPtr initializer = nullptr;
+        if (match(TokenType::ASSIGN))
+        {
+            if (peek().type == TokenType::LBRACKET) initializer = parseArrayLiteral();
+            else initializer = parseExpr();
+        }
+        
+        consume(TokenType::SEMICOLON, "Expected ';'");
+        
+        return std::make_unique<AST::ArrayDeclStmt>(id.value, baseType, std::move(size), std::move(initializer));
+    }
+    
     Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
 
     AST::ExprPtr expr = nullptr;
     if (match(TokenType::ASSIGN)) expr = parseExpr();
     consume(TokenType::SEMICOLON, "Expected ';'");
 
-    return std::make_unique<AST::VarDeclStmt>(id.value, type, std::move(expr));
+    return std::make_unique<AST::VarDeclStmt>(id.value, baseType, std::move(expr));
+}
+ 
+std::pair<Type, AST::ExprPtr> Parser::parseArrayType()
+{
+    consume(TokenType::LBRACKET, "Expected '['");
+    
+    AST::ExprPtr size = parseExpr();
+    
+    consume(TokenType::RBRACKET, "Expected ']'");
+    
+    return { Type(), std::move(size) };
 }
 
 AST::StmtPtr Parser::parseFuncDeclStmt()
@@ -160,9 +191,46 @@ AST::StmtPtr Parser::parseObjectChainStmt()
     throw std::runtime_error("Object chain must be field assignment or method call statement");
 }
 
+
+
 AST::StmtPtr Parser::parseVarAsgnStmt(bool fromForLoop)
 {
     Token id = peek(-1);
+    
+    if (match(TokenType::LBRACKET))
+    {
+        AST::ExprPtr index = parseExpr();
+        consume(TokenType::RBRACKET, "Expected ']'");
+
+        if (peek().type == TokenType::NEXT)
+        {
+            AST::ExprPtr arrayExpr = std::make_unique<AST::ArrayExpr>(id.value, std::move(index));
+            AST::ExprPtr object = parseCallsChain(std::move(arrayExpr));
+            
+            if (auto call = dynamic_cast<AST::MethodCallExpr*>(object.get()))
+            {
+                AST::ExprPtr objExpr = std::move(call->object);
+                std::string name = call->name;
+                std::vector<AST::ExprPtr> args;
+                for (auto& a : call->args) args.push_back(std::move(a));
+                
+                if (!fromForLoop) consume(TokenType::SEMICOLON, "Expected ';'");
+                
+                return std::make_unique<AST::MethodCallStmt>(std::move(objExpr), name, std::move(args));
+            }
+            
+            throw std::runtime_error("Array element access must result in method call");
+        }
+
+        consume(TokenType::ASSIGN, "Expected '='");
+        
+        AST::ExprPtr expr = parseExpr();
+        
+        if (!fromForLoop) consume(TokenType::SEMICOLON, "Expected ';'");
+        
+        return std::make_unique<AST::ArrayAsgnStmt>(id.value, std::move(index), std::move(expr));
+    }
+    
     AST::ExprPtr expr = nullptr;
 
     if (match(TokenType::ASSIGN)) expr = parseExpr();
@@ -363,18 +431,29 @@ AST::StmtPtr Parser::parseEchoStmt()
 Type Parser::consumeType()
 {
     Token t = peek();
+    Type baseType;
+    
     switch (t.type)
     {
-        case TokenType::INT: pos++; return Type(TypeValue::INT, "int");
-        case TokenType::FLOAT: pos++; return Type(TypeValue::FLOAT, "float");
-        case TokenType::DOUBLE: pos++; return Type(TypeValue::DOUBLE, "double");
-        case TokenType::CHAR: pos++; return Type(TypeValue::CHAR, "char");
-        case TokenType::BOOL: pos++; return Type(TypeValue::BOOL, "bool");
-        case TokenType::STRING: pos++; return Type(TypeValue::STRING, "string");
-        case TokenType::VOID: pos++; return Type(TypeValue::VOID, "void");
-        case TokenType::IDENTIFIER: pos++; return Type(TypeValue::CLASS, t.value);
+        case TokenType::INT: pos++; baseType = Type(TypeValue::INT, "int"); break;
+        case TokenType::FLOAT: pos++; baseType = Type(TypeValue::FLOAT, "float"); break;
+        case TokenType::DOUBLE: pos++; baseType = Type(TypeValue::DOUBLE, "double"); break;
+        case TokenType::CHAR: pos++; baseType = Type(TypeValue::CHAR, "char"); break;
+        case TokenType::BOOL: pos++; baseType = Type(TypeValue::BOOL, "bool"); break;
+        case TokenType::STRING: pos++; baseType = Type(TypeValue::STRING, "string"); break;
+        case TokenType::VOID: pos++; baseType = Type(TypeValue::VOID, "void"); break;
+        case TokenType::IDENTIFIER: pos++; baseType = Type(TypeValue::CLASS, t.value); break;
         default: throw std::runtime_error("Unsupported type: '" + t.value + "'" + " -> " + std::to_string(t.line) + ":" + std::to_string(t.column));
     }
+    
+    if (match(TokenType::LBRACKET))
+    {
+        consume(TokenType::RBRACKET, "Expected ']' after '['");
+
+        return Type::createArrayType(std::make_shared<Type>(baseType));
+    }
+    
+    return baseType;
 }
 
 AST::ExprPtr Parser::createCompoundAssignmentOperator(Token& id)
@@ -531,6 +610,18 @@ AST::ExprPtr Parser::parsePrimary()
 
             AST::ExprPtr expr = std::make_unique<AST::VarExpr>(token.value);
             
+            if (match(TokenType::LBRACKET))
+            {
+                AST::ExprPtr index = parseExpr();
+
+                consume(TokenType::RBRACKET, "Expected ']'");
+
+                expr = std::make_unique<AST::ArrayExpr>(token.value, std::move(index));
+                
+                // После доступа к элементу массива проверяем возможность вызова методов
+                if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+            }
+            
             if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
 
             return expr;
@@ -553,6 +644,9 @@ AST::ExprPtr Parser::parsePrimary()
         case TokenType::STRING_LIT:
             pos++;
             return std::make_unique<AST::StringLiteral>(token.value);
+        case TokenType::LBRACKET:
+            pos++;
+            return parseArrayLiteral();
         default:
             throw std::runtime_error("Unexpected token: '" + token.value + "'" + " -> " + std::to_string(token.line) + ":" + std::to_string(token.column));
     }
@@ -571,6 +665,38 @@ AST::ExprPtr Parser::parseNewExpr()
     }
 
     return std::make_unique<AST::NewExpr>(id.value, std::move(args));
+}
+
+AST::ExprPtr Parser::parseArrayLiteral()
+{
+    std::vector<AST::ExprPtr> elements;
+    Type elementType;
+    bool firstElement = true;
+    
+    while (!match(TokenType::RBRACKET))
+    {
+        AST::ExprPtr element = parseExpr();
+        
+        if (firstElement)
+        {
+            if (auto intLit = dynamic_cast<AST::IntLiteral*>(element.get())) elementType = Type(TypeValue::INT, "int");
+            else if (auto floatLit = dynamic_cast<AST::FloatLiteral*>(element.get())) elementType = Type(TypeValue::FLOAT, "float");
+            else if (auto doubleLit = dynamic_cast<AST::DoubleLiteral*>(element.get())) elementType = Type(TypeValue::DOUBLE, "double");
+            else if (auto charLit = dynamic_cast<AST::CharLiteral*>(element.get())) elementType = Type(TypeValue::CHAR, "char");
+            else if (auto boolLit = dynamic_cast<AST::BoolLiteral*>(element.get())) elementType = Type(TypeValue::BOOL, "bool");
+            else if (auto stringLit = dynamic_cast<AST::StringLiteral*>(element.get())) elementType = Type(TypeValue::STRING, "string");
+            else if (auto newExpr = dynamic_cast<AST::NewExpr*>(element.get())) elementType = Type(TypeValue::CLASS, newExpr->name);
+            else throw std::runtime_error("Unsupported element type in array literal");
+
+            firstElement = false;
+        }
+        
+        elements.push_back(std::move(element));
+        
+        if (peek().type != TokenType::RBRACKET) consume(TokenType::COMMA, "Expected ','");
+    }
+    
+    return std::make_unique<AST::ArrayLiteral>(std::move(elements), elementType);
 }
 
 AST::ExprPtr Parser::parseCallsChain(AST::ExprPtr expr)

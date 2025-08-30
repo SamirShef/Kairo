@@ -49,8 +49,6 @@ int main(int argc, char** argv)
     std::string fileContent( (std::istreambuf_iterator<char>(sourceFile)), (std::istreambuf_iterator<char>()));
     Lexer lexer = Lexer(fileContent);
     std::vector<Token> tokens = lexer.tokenize();
-    
-    //std::cout << "\n=======TOKENS======\n" << std::endl;
 
     Parser parser = Parser(tokens);
     std::vector<AST::StmtPtr> stmts = parser.parse();
@@ -61,9 +59,9 @@ int main(int argc, char** argv)
     CodeGenerator codegen("stage_lang_compiler");
     codegen.generate(stmts);
     
-    /* std::cout << "\n======LLVM IR======\n" << std::endl;
+    //std::cout << "\n======LLVM IR======\n" << std::endl;
 
-    codegen.printIR(); */
+    //codegen.printIR();
     std::cerr << std::flush; std::cout << std::flush;
 
     llvm::InitializeNativeTarget();

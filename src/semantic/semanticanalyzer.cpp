@@ -1,7 +1,5 @@
 #include "../../include/semantic/semanticanalyzer.hpp"
 #include <llvm/IR/Type.h>
-#include <memory>
-#include <stdexcept>
 
 std::string typeToString(Type);
 
@@ -14,6 +12,7 @@ void SemanticAnalyzer::analyze(const std::vector<AST::StmtPtr>& stmts)
 void SemanticAnalyzer::analyzeStmt(AST::Stmt& stmt)
 {
     if (auto vds = dynamic_cast<AST::VarDeclStmt*>(&stmt)) analyzeVarDeclStmt(*vds);
+    else if (auto aas = dynamic_cast<AST::ArrayAsgnStmt*>(&stmt)) analyzeArrayAsgnStmt(*aas);
     else if (auto vas = dynamic_cast<AST::VarAsgnStmt*>(&stmt)) analyzeVarAsgnStmt(*vas);
     else if (auto fas = dynamic_cast<AST::FieldAsgnStmt*>(&stmt)) analyzeFieldAsgnStmt(*fas);
     else if (auto fds = dynamic_cast<AST::FuncDeclStmt*>(&stmt)) analyzeFuncDeclStmt(*fds);
@@ -47,6 +46,59 @@ void SemanticAnalyzer::analyzeVarDeclStmt(AST::VarDeclStmt& vds)
     }
 
     variables.top().insert({vds.name, vds.type});
+}
+
+void SemanticAnalyzer::analyzeArrayAsgnStmt(AST::ArrayAsgnStmt& aas)
+{
+    auto copy = variables;
+    Type arrayType;
+    bool found = false;
+    
+    while (!copy.empty())
+    {
+        const auto& scope = copy.top();
+        auto it = scope.find(aas.name);
+        if (it != scope.end())
+        {
+            arrayType = it->second;
+            found = true;
+            break;
+        }
+
+        copy.pop();
+    }
+
+    if (!found)
+    {
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                for (const auto& field : classIt->second.fields)
+                {
+                    if (field->name == aas.name)
+                    {
+                        arrayType = field->type;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (!found) throw std::runtime_error("Array variable '" + aas.name + "' does not exist");
+
+    if (arrayType.type != TypeValue::ARRAY) throw std::runtime_error("Variable '" + aas.name + "' is not an array");
+
+    Type indexType = analyzeExpr(*aas.index);
+    if (indexType.type != TypeValue::INT) throw std::runtime_error("Array index must be of type int");
+
+    Type valueType = analyzeExpr(*aas.expr);
+    if (!canImplicitlyCast(valueType, *arrayType.elementType)) 
+        throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(valueType) + " to " + typeToString(*arrayType.elementType));
 }
 
 void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
@@ -467,9 +519,11 @@ void SemanticAnalyzer::analyzeConstructorMember(std::string className, std::vect
 Type SemanticAnalyzer::analyzeExpr(const AST::Expr& expr)
 {
     if (auto lit = dynamic_cast<const AST::Literal*>(&expr)) return analyzeLiteral(*lit);
+    else if (auto arrayLit = dynamic_cast<const AST::ArrayLiteral*>(&expr)) return analyzeArrayLiteral(*arrayLit);
     else if (auto binary = dynamic_cast<const AST::BinaryExpr*>(&expr)) return analyzeBinaryExpr(*binary);
     else if (auto unary = dynamic_cast<const AST::UnaryExpr*>(&expr)) return analyzeUnaryExpr(*unary);
     else if (auto var = dynamic_cast<const AST::VarExpr*>(&expr)) return analizeVarExpr(*var);
+    else if (auto arrayAccess = dynamic_cast<const AST::ArrayExpr*>(&expr)) return analyzeArrayExpr(*arrayAccess);
     else if (auto func = dynamic_cast<const AST::FuncCallExpr*>(&expr)) return analyzeFuncCallExpr(*func);
     else if (auto newExpr = dynamic_cast<const AST::NewExpr*>(&expr)) return analyzeNewExpr(*newExpr);
     else if (auto field = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return analyzeFieldAccessExpr(*field);
@@ -542,6 +596,73 @@ Type SemanticAnalyzer::analyzeUnaryExpr(const AST::UnaryExpr& expr)
 Type SemanticAnalyzer::analyzeLiteral(const AST::Literal& literal)
 {
     return literal.type;
+}
+
+Type SemanticAnalyzer::analyzeArrayLiteral(const AST::ArrayLiteral& literal)
+{
+    if (literal.elements.empty()) throw std::runtime_error("Array literal cannot be empty");
+    
+    Type firstElementType = analyzeExpr(*literal.elements[0]);
+    
+    for (size_t i = 1; i < literal.elements.size(); ++i)
+    {
+        Type elementType = analyzeExpr(*literal.elements[i]);
+        if (!canImplicitlyCast(elementType, firstElementType) && !canImplicitlyCast(firstElementType, elementType))
+            throw std::runtime_error("All array elements must have the same type");
+    }
+    
+    return Type::createArrayType(std::make_shared<Type>(firstElementType));
+}
+
+Type SemanticAnalyzer::analyzeArrayExpr(const AST::ArrayExpr& expr)
+{
+    auto copy = variables;
+    Type arrayType;
+    bool found = false;
+    
+    while (!copy.empty())
+    {
+        const auto& scope = copy.top();
+        auto it = scope.find(expr.name);
+        if (it != scope.end())
+        {
+            arrayType = it->second;
+            found = true;
+            break;
+        }
+
+        copy.pop();
+    }
+
+    if (!found)
+    {
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                for (const auto& field : classIt->second.fields)
+                {
+                    if (field->name == expr.name)
+                    {
+                        arrayType = field->type;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (!found) throw std::runtime_error("Array variable '" + expr.name + "' does not exist");
+
+    if (arrayType.type != TypeValue::ARRAY) throw std::runtime_error("Variable '" + expr.name + "' is not an array");
+
+    Type indexType = analyzeExpr(*expr.index);
+    if (indexType.type != TypeValue::INT) throw std::runtime_error("Array index must be of type int");
+
+    return *arrayType.elementType;
 }
 
 Type SemanticAnalyzer::analizeVarExpr(const AST::VarExpr& expr)
@@ -750,6 +871,10 @@ std::string typeToString(Type type)
         case TypeValue::STRING: return "string";
         case TypeValue::VOID: return "void";
         case TypeValue::CLASS: return "class <" + type.name + ">";
+        case TypeValue::ARRAY: 
+            if (type.elementType) return typeToString(*type.elementType) + "[]";
+            
+            return "array[]";
         default: return "unknown";
     }
 }

@@ -145,6 +145,39 @@ namespace AST
         }
     };
 
+    class ArrayDeclStmt : public Stmt
+    {
+    public:
+        std::string name;
+        Type elementType;
+        ExprPtr size;
+        ExprPtr initializer; // Может быть nullptr для инициализации по умолчанию
+
+        ArrayDeclStmt(std::string n, Type et, ExprPtr s, ExprPtr init = nullptr) : name(n), elementType(et), size(std::move(s)), initializer(std::move(init)) {}
+
+        ~ArrayDeclStmt() override = default;
+        ArrayDeclStmt* clone() const override
+        {
+            return new ArrayDeclStmt(name, elementType, std::unique_ptr<Expr>(size->clone()), initializer ? std::unique_ptr<Expr>(initializer->clone()) : nullptr);
+        }
+    };
+
+    class ArrayAsgnStmt : public Stmt
+    {
+    public:
+        std::string name;
+        ExprPtr index;
+        ExprPtr expr;
+
+        ArrayAsgnStmt(std::string n, ExprPtr idx, ExprPtr e) : name(n), index(std::move(idx)), expr(std::move(e)) {}
+
+        ~ArrayAsgnStmt() override = default;
+        ArrayAsgnStmt* clone() const override
+        {
+            return new ArrayAsgnStmt(name, std::unique_ptr<Expr>(index->clone()), std::unique_ptr<Expr>(expr->clone()));
+        }
+    };
+
     class VarAsgnStmt : public Stmt
     {
     public:
@@ -488,6 +521,26 @@ public:
         }
     };
 
+    class ArrayLiteral : public Literal
+    {
+    public:
+        std::vector<ExprPtr> elements;
+        Type elementType;
+        ExprPtr size; // Размер массива (может быть nullptr)
+
+        ArrayLiteral(std::vector<ExprPtr> elems, Type et, ExprPtr s = nullptr) : Literal(Value(std::vector<Value>()), Type::createArrayType(std::make_shared<Type>(et))), elements(std::move(elems)), elementType(et), size(std::move(s)) {}
+
+        ~ArrayLiteral() override = default;
+        ArrayLiteral* clone() const override
+        {
+            std::vector<ExprPtr> elementsCopy;
+            for (const auto& elem : elements)
+                elementsCopy.push_back(std::unique_ptr<Expr>(elem->clone()));
+
+            return new ArrayLiteral(std::move(elementsCopy), elementType, size ? std::unique_ptr<Expr>(size->clone()) : nullptr);
+        }
+    };
+
     class BinaryExpr : public Expr
     {
     public:
@@ -530,6 +583,21 @@ public:
         VarExpr* clone() const override
         {
             return new VarExpr(name);
+        }
+    };
+
+    class ArrayExpr : public Expr
+    {
+    public:
+        std::string name;
+        ExprPtr index;
+
+        ArrayExpr(std::string n, ExprPtr idx) : name(n), index(std::move(idx)) {}
+
+        ~ArrayExpr() override = default;
+        ArrayExpr* clone() const override
+        {
+            return new ArrayExpr(name, std::unique_ptr<Expr>(index->clone()));
         }
     };
 

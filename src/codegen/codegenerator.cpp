@@ -88,6 +88,30 @@ std::string CodeGenerator::resolveClassName(const AST::Expr& expr)
     }
     else if (auto field = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return resolveClassName(*field->object);
     else if (auto method = dynamic_cast<const AST::MethodCallExpr*>(&expr)) return resolveClassName(*method->object);
+    else if (auto array = dynamic_cast<const AST::ArrayExpr*>(&expr))
+    {
+        auto copy = typesScopeStack;
+        while (!copy.empty())
+        {
+            const auto& scope = copy.top();
+            auto it = scope.find(array->name);
+            if (it != scope.end())
+            {
+                if (it->second.type == TypeValue::ARRAY && it->second.elementType)
+                {
+                    if (it->second.elementType->type == TypeValue::CLASS)
+                    {
+                        return it->second.elementType->name;
+                    }
+                    throw std::runtime_error("Array element type is not a class: " + array->name);
+                }
+                throw std::runtime_error("Variable '" + array->name + "' is not an array");
+            }
+            copy.pop();
+        }
+        
+        throw std::runtime_error("Array variable '" + array->name + "' not found");
+    }
 
     throw std::runtime_error("Unable to resolve class name for expression");
 }
@@ -103,6 +127,14 @@ llvm::Type* CodeGenerator::getLLVMType(Type type)
         case TypeValue::BOOL: return llvm::Type::getInt1Ty(context);
         case TypeValue::STRING: return llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
         case TypeValue::VOID: return llvm::Type::getVoidTy(context);
+        case TypeValue::ARRAY:
+        {
+            if (!type.elementType) throw std::runtime_error("Array type without element type");
+
+            llvm::Type* elementLLVMType = getLLVMType(*type.elementType);
+
+            return llvm::PointerType::get(elementLLVMType, 0);
+        }
         case TypeValue::CLASS:
         {
             auto it = classes.find(type.name);
@@ -149,6 +181,7 @@ void CodeGenerator::generate(const std::vector<AST::StmtPtr>& stmts)
 void CodeGenerator::generateStmt(const AST::Stmt& stmt)
 {
     if (auto vds = dynamic_cast<const AST::VarDeclStmt*>(&stmt)) generateVarDeclStmt(*vds);
+    else if (auto aas = dynamic_cast<const AST::ArrayAsgnStmt*>(&stmt)) generateArrayAsgnStmt(*aas);
     else if (auto vas = dynamic_cast<const AST::VarAsgnStmt*>(&stmt)) generateVarAsgnStmt(*vas);
     else if (auto fas = dynamic_cast<const AST::FieldAsgnStmt*>(&stmt)) generateFieldAsgnStmt(*fas);
     else if (auto fds = dynamic_cast<const AST::FuncDeclStmt*>(&stmt)) generateFuncDeclStmt(*fds);
@@ -192,6 +225,20 @@ void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
     builder.CreateStore(initValue, alloca);
     setNamedValue(stmt.name, alloca);
     typesScopeStack.top()[stmt.name] = stmt.type;
+    
+    if (stmt.type.type == TypeValue::ARRAY)
+    {
+        auto it = arrayTypes.find(stmt.name);
+        if (it == arrayTypes.end() || it->second->getNumElements() == 0)
+        {
+            llvm::Type* elementType = getLLVMType(*stmt.type.elementType);
+            llvm::ArrayType* arrayType = llvm::ArrayType::get(elementType, stmt.type.arraySize);
+            arrayTypes[stmt.name] = arrayType;
+        }
+        
+        auto literalIt = arrayTypes.find("array_literal");
+        if (literalIt != arrayTypes.end() && literalIt->second->getNumElements() > 0) arrayTypes[stmt.name] = literalIt->second;
+    }
 }
 
 void CodeGenerator::generateVarAsgnStmt(const AST::VarAsgnStmt& vas)
@@ -215,7 +262,7 @@ void CodeGenerator::generateVarAsgnStmt(const AST::VarAsgnStmt& vas)
                     llvm::Value* gep = builder.CreateStructGEP(classIt->second.type, thisPtr, fieldIndex, vas.name + ".addr");
                     
                     llvm::Value* value = generateExpr(*vas.expr);
-                    llvm::Type* fieldTy = classIt->second.type->getElementType(fieldIndex);
+                    llvm::Type* fieldTy = llvm::cast<llvm::StructType>(classIt->second.type)->getElementType(fieldIndex);
                     value = castToExpectedIfNeeded(value, fieldTy);
                     
                     builder.CreateStore(value, gep);
@@ -257,7 +304,7 @@ void CodeGenerator::generateFieldAsgnStmt(const AST::FieldAsgnStmt& stmt)
     llvm::Value* gep = builder.CreateStructGEP(classIt->second.type, baseObjectPtr, fieldIndex, stmt.name + ".addr");
     
     llvm::Value* value = generateExpr(*stmt.expr);
-    llvm::Type* fieldTy = classIt->second.type->getElementType(fieldIndex);
+    llvm::Type* fieldTy = llvm::cast<llvm::StructType>(classIt->second.type)->getElementType(fieldIndex);
     value = castToExpectedIfNeeded(value, fieldTy);
 
     builder.CreateStore(value, gep);
@@ -665,7 +712,7 @@ void CodeGenerator::generateClassDeclStmt(const AST::ClassDeclStmt& stmt)
             {
                 int fieldIndex = classInfo.fieldIndices[field->name];
                 llvm::Value* gep = builder.CreateStructGEP(classInfo.type, thisArg, fieldIndex, field->name + ".addr");
-                llvm::Type* fieldTy = classInfo.type->getElementType(fieldIndex);
+                llvm::Type* fieldTy = llvm::cast<llvm::StructType>(classInfo.type)->getElementType(fieldIndex);
 
                 llvm::Value* initValue = nullptr;
                 if (field->expr) initValue = generateExpr(*field->expr);
@@ -747,9 +794,11 @@ void CodeGenerator::generateMethodDeclStmt(const AST::MethodMember& stmt)
 llvm::Value* CodeGenerator::generateExpr(const AST::Expr& expr)
 {
     if (auto lit = dynamic_cast<const AST::Literal*>(&expr)) return generateLiteral(*lit);
+    else if (auto arrayLit = dynamic_cast<const AST::ArrayLiteral*>(&expr)) return generateArrayLiteral(*arrayLit);
     else if (auto binary = dynamic_cast<const AST::BinaryExpr*>(&expr)) return generateBinaryExpr(*binary);
     else if (auto unary = dynamic_cast<const AST::UnaryExpr*>(&expr)) return generateUnaryExpr(*unary);
     else if (auto var = dynamic_cast<const AST::VarExpr*>(&expr)) return generateVarExpr(*var);
+    else if (auto arrayAccess = dynamic_cast<const AST::ArrayExpr*>(&expr)) return generateArrayExpr(*arrayAccess);
     else if (auto func = dynamic_cast<const AST::FuncCallExpr*>(&expr)) return generateFuncCallExpr(*func);
     else if (auto n = dynamic_cast<const AST::NewExpr*>(&expr)) return generateNewExpr(*n);
     else if (auto f = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return generateFieldAccessExpr(*f);
@@ -773,7 +822,13 @@ llvm::Value* CodeGenerator::generateLiteral(const AST::Literal& literal)
         case TypeValue::STRING:
         {
             const auto& str = std::get<std::string>(value);
+            
             return builder.CreateGlobalString(str);
+        }
+        case TypeValue::ARRAY:
+        {
+            if (auto arrayLit = dynamic_cast<const AST::ArrayLiteral*>(&literal)) return generateArrayLiteral(*arrayLit);
+            else throw std::runtime_error("Array literal must be of type ArrayLiteral");
         }
         default: throw std::runtime_error("Unknown literal type in generateLiteral");
     }
@@ -892,7 +947,7 @@ llvm::Value* CodeGenerator::generateVarExpr(const AST::VarExpr& varExpr)
                     
                     int fieldIndex = fieldIt->second;
                     llvm::Value* gep = builder.CreateStructGEP(classIt->second.type, thisPtr, fieldIndex, varExpr.name + ".addr");
-                    llvm::Type* fieldTy = classIt->second.type->getElementType(fieldIndex);
+                    llvm::Type* fieldTy = llvm::cast<llvm::StructType>(classIt->second.type)->getElementType(fieldIndex);
 
                     return builder.CreateLoad(fieldTy, gep, varExpr.name);
                 }
@@ -1071,8 +1126,7 @@ llvm::Value* CodeGenerator::generateNewExpr(const AST::NewExpr& expr)
     llvm::Type* targetType = llvm::PointerType::get(classInfo.type, 0);
     llvm::Value* object = builder.CreateBitCast(allocated, targetType);
     
-    if (llvm::Function* defaultConstrutor = module->getFunction(expr.name + std::string("_constructor")))
-        builder.CreateCall(defaultConstrutor, {object});
+    if (llvm::Function* defaultConstrutor = module->getFunction(expr.name + std::string("_constructor"))) builder.CreateCall(defaultConstrutor, { object });
 
     std::vector<llvm::Value*> argValues;
     argValues.reserve(expr.args.size());
@@ -1124,7 +1178,7 @@ llvm::Value* CodeGenerator::generateFieldAccessExpr(const AST::FieldAccessExpr& 
 
     int fieldIndex = fldIt->second;
     llvm::Value* gep = builder.CreateStructGEP(it->second.type, object, fieldIndex, expr.name + ".addr");
-    llvm::Type* fieldTy = it->second.type->getElementType(fieldIndex);
+    llvm::Type* fieldTy = llvm::cast<llvm::StructType>(it->second.type)->getElementType(fieldIndex);
 
     return builder.CreateLoad(fieldTy, gep, expr.name);
 }
@@ -1143,7 +1197,6 @@ llvm::Value* CodeGenerator::generateMethodCallExpr(const AST::MethodCallExpr& ex
     auto methIt = it->second.methods.find(expr.name);
     if (methIt == it->second.methods.end()) throw std::runtime_error("Method not found: " + expr.name);
 
-    // Try overloads
     for (llvm::Function* method : methIt->second)
     {
         auto* fnty = method->getFunctionType();
@@ -1215,6 +1268,123 @@ void CodeGenerator::generateConstructorDecl(const AST::ConstructorMember& ctor)
 llvm::Value* CodeGenerator::generateThisExpr(const AST::ThisExpr&)
 {
     return getNamedValue("this");
+}
+
+void CodeGenerator::generateArrayAsgnStmt(const AST::ArrayAsgnStmt& stmt)
+{
+    llvm::Value* arrayPtr = getNamedValue(stmt.name);
+    if (!arrayPtr) throw std::runtime_error("Array variable '" + stmt.name + "' not found");
+
+    llvm::Value* index = generateExpr(*stmt.index);
+    
+    llvm::Value* value = generateExpr(*stmt.expr);
+    
+    llvm::PointerType* ptrType = llvm::cast<llvm::PointerType>(arrayPtr->getType());
+    if (!ptrType) throw std::runtime_error("Variable '" + stmt.name + "' is not a pointer type");
+    
+    llvm::AllocaInst* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr);
+    if (!allocaInst) throw std::runtime_error("Variable '" + stmt.name + "' is not an allocated array");
+    
+    llvm::Type* allocatedType = allocaInst->getAllocatedType();
+    
+    llvm::Type* allocaType = allocaInst->getType();
+    
+    llvm::ArrayType* arrayType = nullptr;
+    
+    if (allocatedType->isPointerTy()) arrayType = llvm::dyn_cast<llvm::ArrayType>(allocatedType);
+    
+    if (!arrayType) {
+        auto it = arrayTypes.find(stmt.name);
+        if (it != arrayTypes.end()) arrayType = it->second;
+        else
+        {
+            llvm::Type* elementType = arrayType->getElementType();
+            arrayType = llvm::ArrayType::get(elementType, arrayType->getNumElements());
+        }
+    }
+    
+    std::vector<llvm::Value*> indices =
+    {
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0),
+        index
+    };
+    
+    llvm::Value* arrayPtrDeref = builder.CreateLoad(arrayPtr->getType(), arrayPtr, stmt.name + ".deref");
+    llvm::Value* elementPtr = builder.CreateGEP(arrayType, arrayPtrDeref, indices, stmt.name + ".element");
+    
+    builder.CreateStore(value, elementPtr);
+}
+
+llvm::Value* CodeGenerator::generateArrayLiteral(const AST::ArrayLiteral& arrayLit)
+{
+    llvm::Type* elementType = getLLVMType(arrayLit.elementType);
+    
+    size_t arraySize = arrayLit.elements.size();
+    
+    llvm::ArrayType* arrayType = llvm::ArrayType::get(elementType, arraySize);
+    llvm::AllocaInst* arrayAlloca = builder.CreateAlloca(arrayType, nullptr, "array_literal");
+    
+    for (size_t i = 0; i < arraySize; ++i)
+    {
+        llvm::Value* element = generateExpr(*arrayLit.elements[i]);
+        
+        std::vector<llvm::Value*> indices =
+        {
+            llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0),
+            llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i)
+        };
+        llvm::Value* elementPtr = builder.CreateGEP(arrayType, arrayAlloca, indices, "element_ptr");
+        
+        builder.CreateStore(element, elementPtr);
+    }
+    
+    arrayTypes["array_literal"] = arrayType;
+    
+    return arrayAlloca;
+}
+
+llvm::Value* CodeGenerator::generateArrayExpr(const AST::ArrayExpr& expr)
+{
+    llvm::Value* arrayPtr = getNamedValue(expr.name);
+    if (!arrayPtr) throw std::runtime_error("Array variable '" + expr.name + "' not found");
+
+    llvm::Value* index = generateExpr(*expr.index);
+    
+    llvm::PointerType* ptrType = llvm::cast<llvm::PointerType>(arrayPtr->getType());
+    if (!ptrType) throw std::runtime_error("Variable '" + expr.name + "' is not a pointer type");
+    
+    llvm::AllocaInst* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr);
+    if (!allocaInst) throw std::runtime_error("Variable '" + expr.name + "' is not an allocated array");
+    
+    llvm::Type* allocatedType = allocaInst->getAllocatedType();
+    
+    llvm::Type* allocaType = allocaInst->getType();
+    
+    llvm::ArrayType* arrayType = nullptr;
+    
+    if (allocatedType->isPointerTy()) arrayType = llvm::dyn_cast<llvm::ArrayType>(allocatedType);
+    
+    if (!arrayType)
+    {
+        auto it = arrayTypes.find(expr.name);
+        if (it != arrayTypes.end()) arrayType = it->second;
+        else
+        {
+            llvm::Type* elementType = arrayType->getElementType();
+            arrayType = llvm::ArrayType::get(elementType, arrayType->getNumElements());
+        }
+    }
+    
+    std::vector<llvm::Value*> indices =
+    {
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0),
+        index
+    };
+    
+    llvm::Value* arrayPtrDeref = builder.CreateLoad(arrayPtr->getType(), arrayPtr, expr.name + ".deref");
+    llvm::Value* elementPtr = builder.CreateGEP(arrayType, arrayPtrDeref, indices, expr.name + ".element");
+    
+    return builder.CreateLoad(arrayType->getElementType(), elementPtr, expr.name + ".value");
 }
 
 void CodeGenerator::printIR() const

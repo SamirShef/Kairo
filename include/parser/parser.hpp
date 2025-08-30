@@ -15,6 +15,7 @@ private:
 
     AST::StmtPtr parseStmt();
     AST::StmtPtr parseVarDeclStmt();
+    AST::StmtPtr parseArrayDeclStmt(Type elementType, std::string name);
     AST::StmtPtr parseFuncDeclStmt();
     AST::StmtPtr parseFuncCallStmt();
     AST::StmtPtr parseThisStmt();
@@ -44,12 +45,14 @@ private:
     AST::ExprPtr parseUnary();
     AST::ExprPtr parsePrimary();
     AST::ExprPtr parseNewExpr();
+    AST::ExprPtr parseArrayLiteral();
     AST::ExprPtr parseCallsChain(AST::ExprPtr);
     AST::ExprPtr parseFieldAccessExpr(AST::ExprPtr, std::string&);
     AST::ExprPtr parseMethodCallExpr(AST::ExprPtr, std::string&);
     AST::ExprPtr parseThisExpr();
     
     Type consumeType();
+    std::pair<Type, AST::ExprPtr> parseArrayType();
 
     Token peek();
     Token peek(int);

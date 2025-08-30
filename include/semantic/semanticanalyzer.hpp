@@ -64,6 +64,7 @@ private:
 
     void analyzeStmt(AST::Stmt&);
     void analyzeVarDeclStmt(AST::VarDeclStmt&);
+    void analyzeArrayAsgnStmt(AST::ArrayAsgnStmt&);
     void analyzeVarAsgnStmt(AST::VarAsgnStmt&);
     void analyzeFieldAsgnStmt(AST::FieldAsgnStmt&);
     void analyzeFuncDeclStmt(AST::FuncDeclStmt&);
@@ -86,7 +87,9 @@ private:
     Type analyzeBinaryExpr(const AST::BinaryExpr&);
     Type analyzeUnaryExpr(const AST::UnaryExpr&);
     Type analyzeLiteral(const AST::Literal&);
+    Type analyzeArrayLiteral(const AST::ArrayLiteral&);
     Type analizeVarExpr(const AST::VarExpr&);
+    Type analyzeArrayExpr(const AST::ArrayExpr&);
     Type analyzeFuncCallExpr(const AST::FuncCallExpr&);
     Type analyzeNewExpr(const AST::NewExpr&);
     Type analyzeFieldAccessExpr(const AST::FieldAccessExpr&);

@@ -37,6 +37,12 @@ private:
     };
     std::map<std::string, ClassInfo> classes;
     std::stack<std::string> classesStack;
+    
+    // Store array type information for LLVM 20 opaque pointers
+    std::map<std::string, llvm::ArrayType*> arrayTypes;
+    
+    // Store array type information by variable name for better tracking
+    std::map<std::string, std::string> arrayVariableNames; // array_literal -> variable_name
 
     llvm::Type* getLLVMType(Type);
     llvm::Value* castToExpectedIfNeeded(llvm::Value* value, llvm::Type* expectedType);
@@ -52,6 +58,7 @@ private:
     
     void generateStmt(const AST::Stmt&);
     void generateVarDeclStmt(const AST::VarDeclStmt&);
+    void generateArrayAsgnStmt(const AST::ArrayAsgnStmt&);
     void generateVarAsgnStmt(const AST::VarAsgnStmt&);
     void generateFieldAsgnStmt(const AST::FieldAsgnStmt&);
     void generateFuncDeclStmt(const AST::FuncDeclStmt&);
@@ -72,9 +79,11 @@ private:
 
     llvm::Value* generateExpr(const AST::Expr&);
     llvm::Value* generateLiteral(const AST::Literal&);
+    llvm::Value* generateArrayLiteral(const AST::ArrayLiteral&);
     llvm::Value* generateBinaryExpr(const AST::BinaryExpr&);
     llvm::Value* generateUnaryExpr(const AST::UnaryExpr&);
     llvm::Value* generateVarExpr(const AST::VarExpr&);
+    llvm::Value* generateArrayExpr(const AST::ArrayExpr&);
     llvm::Value* generateFuncCallExpr(const AST::FuncCallExpr&);
     llvm::Value* generateNewExpr(const AST::NewExpr&);
     llvm::Value* generateFieldAccessExpr(const AST::FieldAccessExpr&);
