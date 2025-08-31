@@ -108,6 +108,14 @@ sudo xargs -a build/install_manifest.txt -r rm -vf
   winget install Ninja-build.Ninja
   ```
 
+**Note**: The CI system builds LLVM from source using the provided `install.bat` and `build.bat` scripts. This approach ensures compatibility but takes longer than using pre-built packages.
+
+**Additional dependencies for CI approach** (if using Option C in step 3):
+- **7-Zip**: For extracting LLVM source archives
+- **Perl**: For running patch scripts (usually comes with Git for Windows)
+- **Git**: For cloning LLVM sources (if using master branch)
+- **Disk space**: ~10GB free space for building LLVM from source
+
 ### 2) Clone the repository
 ```cmd
 git clone https://github.com/SamirShef/StageLang.git
@@ -116,15 +124,32 @@ cd StageLang
 
 ### 3) Configure the build
 Open **Developer Command Prompt for VS 2022** or **x64 Native Tools Command Prompt** and navigate to the project directory:
+
+**Option A: Using Visual Studio generator (recommended)**
 ```cmd
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 ```
-If using Ninja:
+
+**Option B: Using Ninja (faster builds)**
 ```cmd
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 ```
 
-If CMake cannot find LLVM, specify the LLVM installation path:
+**Option C: Using CI-compatible approach**
+If you want to use the same approach as CI (building LLVM from source):
+```cmd
+# Set environment variables (similar to CI)
+set BUILD_PROJECT=llvm
+set LLVM_VERSION=20.1.0
+set WORKING_DIR=%CD%\llvm-build
+
+# Run the CI scripts
+call set-env.bat msvc17 msvcrt amd64 Release
+call install.bat
+call build.bat
+```
+
+**Note**: If CMake cannot find LLVM, specify the LLVM installation path:
 ```cmd
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="C:\Program Files\LLVM\lib\cmake\llvm"
 ```
@@ -147,6 +172,15 @@ cmake --build build --config Release
   cmake --build build --config Release
   cmake --install build
   ```
+
+**Alternative: CI-compatible installation**
+If you used the CI approach (Option C in step 3), the LLVM will be installed locally and you can build StageLang directly:
+```cmd
+# After running CI scripts, build StageLang
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="%WORKING_DIR%\llvm\build\lib\cmake\llvm"
+cmake --build build --config Release
+cmake --install build --prefix="%USERPROFILE%\AppData\Local\Programs\StageLang"
+```
 
 ### 6) Add to PATH
 After installation, add the StageLang directory to your system PATH:
@@ -195,6 +229,11 @@ for /f "tokens=*" %i in (build\install_manifest.txt) do del "%i"
 - **Build tools not found**: Install Visual Studio Build Tools with C++ workload
 - **PATH not updated**: Restart Command Prompt/PowerShell after adding to PATH
 - **Permission denied**: Run Command Prompt as Administrator for system-wide installation
+- **CI compatibility**: If you want to use the same approach as CI, ensure you have:
+  - 7-Zip installed for extracting LLVM sources
+  - Perl installed for running patch scripts
+  - Git for cloning LLVM sources (if using master branch)
+  - Sufficient disk space (~10GB) for building LLVM from source
 
 ## Types
 List of _primitive_ types:
