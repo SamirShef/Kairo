@@ -37,12 +37,24 @@ private:
     };
     std::map<std::string, ClassInfo> classes;
     std::stack<std::string> classesStack;
+
+    struct TraitInfo
+    {
+        std::map<std::string, std::vector<llvm::Function*>> methods;
+    };
+    std::map<std::string, TraitInfo> traits;
+
+    struct TraitImplInfo
+    {
+        std::string traitName;
+        std::string className;
+        std::map<std::string, llvm::Function*> implementations;
+    };
+    std::map<std::string, std::vector<TraitImplInfo>> traitImplementations;
     
-    // Store array type information for LLVM 20 opaque pointers
     std::map<std::string, llvm::ArrayType*> arrayTypes;
     
-    // Store array type information by variable name for better tracking
-    std::map<std::string, std::string> arrayVariableNames; // array_literal -> variable_name
+    std::map<std::string, std::string> arrayVariableNames;
 
     llvm::Type* getLLVMType(Type);
     llvm::Value* castToExpectedIfNeeded(llvm::Value* value, llvm::Type* expectedType);
@@ -76,6 +88,8 @@ private:
     void generateFieldDeclStmt(const AST::FieldMember&);
     void generateMethodDeclStmt(const AST::MethodMember&);
     void generateConstructorDecl(const AST::ConstructorMember&);
+    void generateTraitDeclStmt(const AST::TraitDeclStmt&);
+    void generateTraitImplStmt(const AST::TraitImplStmt&);
 
     llvm::Value* generateExpr(const AST::Expr&);
     llvm::Value* generateLiteral(const AST::Literal&);

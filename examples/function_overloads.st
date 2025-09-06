@@ -1,11 +1,12 @@
 func test()
 {
-    echo "Hello world";
+    echo "Hello world\n";
 }
 
 func test(int a)
 {
     echo a * a;
+    echo '\n';
 }
 
 func int main()

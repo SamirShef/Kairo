@@ -1,7 +1,7 @@
 # StageLang
 **Stage** - multi-paradigm programming language
 
-Compiler version: **v0.5** – C++ &amp; LLVM
+Compiler version: **v0.6** – C++ &amp; LLVM
 
 ## Installation (Linux)
 
@@ -284,6 +284,21 @@ Type rules (summary):
 - Logical operators require `bool` operands and produce `bool`.
 - Assignment (incl. compound) requires the right-hand side to be implicitly castable to the variable type.
 
+## Escape-secuences
+* `\\` - character `\`
+* `\n` - move to next line
+* `\t` - tab character
+* `\r` - carriage return
+* `\"` - character `"`
+* `\'` - character `'`
+* `\0` - null character
+* `\a` - alert sound
+* `\b` - represents the backspace character
+* `\f` - form feed character
+* `\v` - vertical tab character
+* `\x` - hexadecimal number character
+* `\u` - unicode character (ASCII)
+
 ## Syntax
 List of statements:
 * [Global variables definition](#global-variables-definition)
@@ -297,6 +312,7 @@ List of statements:
 * [Echo](#echo-statement)
 * [Classes](#classes)
 * [Arrays](#arrays)
+* [Traits](#traits)
 
 > [!NOTE]
 > In the end all statements you must be add `;` character.
@@ -398,11 +414,13 @@ func int main()
     {
         a *= 2;
         echo a;
+        echo '\n';
     }
     else
     {
         b /= a;
         echo b + a;
+        echo '\n';
     }
     
     return 0;
@@ -417,9 +435,9 @@ func int main()
 >     var int a = 10;
 >     var int b = 20;
 >
->     if (a == b) echo "a equals b";
->     else if (a < b) echo "a less then b";
->     else echo "a greater then b";
+>     if (a == b) echo "a equals b\n";
+>     else if (a < b) echo "a less then b\n";
+>     else echo "a greater then b\n";
 > 
 >     return 0;
 > }
@@ -435,6 +453,7 @@ func int main()
     while (i < 10)
     {
         echo i;
+        echo '\n';
         i += 1;
     }
 
@@ -447,7 +466,7 @@ func int main()
 > ```C++
 > func int main()
 > {
->     while (true) echo "Hello world! This is infinity cycle!";
+>     while (true) echo "Hello world! This is infinity cycle!\n";
 > 
 >     return 0;
 > }
@@ -463,6 +482,7 @@ func int main()
     do 
     {
         echo i;
+        echo '\n';
         i += 1;
     } -> (i < 10);
 
@@ -475,7 +495,7 @@ func int main()
 > ```C++
 > func int main()
 > {
->     do echo "Hello world! This is infinity cycle!"; -> (true);
+>     do echo "Hello world! This is infinity cycle!\n"; -> (true);
 > 
 >     return 0;
 > }
@@ -489,12 +509,14 @@ func int main()
     for (int i = 0; i < 10; i += 1)
     {
         echo i;
+        echo '\n';
     }
 
     var int i = 0;
     for (i = 10; i > 0; i /= 2)
     {
         echo i;
+        echo '\n';
     }
 
     return 0;
@@ -513,13 +535,13 @@ func int main()
 > ```
 
 ## Echo Statement
-Echo statement can write any value in console. For use echo you need use keyword `echo` and some expression. For example:
+Echo statement can write any value in console. For use echo you need use keyword `echo` and some expression (without moving to a new line). For example:
 ```C++
 func int main()
-func int main()
 {
-    echo "Hello world!";
+    echo "Hello world!\n";
     echo 10 + 2 * (2 + 312);
+    echo '\n';
     return 0;
 }
 ```
@@ -555,7 +577,7 @@ class Car
    
     pub func void startEngine()
     {
-        echo "Vroom vroom...";
+        echo "Vroom vroom...\n";
     }
 
     pub func int getMaxSpeed()
@@ -617,7 +639,7 @@ class Car
    
     pub func void startEngine()
     {
-        echo "Vroom vroom...";
+        echo "Vroom vroom...\n";
     }
 
     pub func int getMaxSpeed()
@@ -636,6 +658,7 @@ func int main()
     var Car car = new Car();
     car->startEngine();
     echo car->getMaxSpeed();
+    echo '\n';
     
     return 0;
 }
@@ -681,7 +704,7 @@ class Car
 >
 >     priv func void startEngine()
 >     {
->         echo "Vroom vroom...";
+>         echo "Vroom vroom...\n";
 >     }
 > }
 > ```
@@ -704,10 +727,15 @@ func int main()
 {
     var int[] numbers = [1, 2, 3, 4];
     echo numbers[0];
+    echo '\n';
 
     numbers[0] = 10;
 
-    for (int i; i < 4; i += 1) echo numbers[i];
+    for (int i; i < 4; i += 1)
+    {
+        echo numbers[i];
+        echo '\n';
+    }
     
     return 0;
 }
@@ -745,5 +773,39 @@ func int test(int[] arr)
 
 > [!WARNING]
 > You cannot to specify size of array.
+
+## Traits
+For traits definition you need use keyword `trait`, identifier and block of function prototypes between `{}`. For example:
+```C++
+trait Converter
+{
+    func string toString();
+}
+```
+
+For implementation trait for class or type you need use keyword `impl`, trait name, keyword `for`, type name and block of implementations trait's functions. For example:
+```C++
+trait Converter
+{
+    func string toString();
+}
+
+impl Converter for int
+{
+    pub func string toString()
+    {
+        return "123";
+    }
+}
+
+int main()
+{
+    var int num = 10;
+    echo num->toString() + "\n";
+    echo 1->toString() + "\n";
+}
+```
+
+You can specify trait as a generalizing type of objects (as variable or function's argument).
 
 More examples you can see in `examples` directory.

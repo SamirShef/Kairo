@@ -26,10 +26,14 @@ func int main()
     
     for (int i; i < 3; i += 1)
     {
+        echo '(';
         echo points[i]->x;
+        echo "; ";
         echo points[i]->getY();
-        if (i != 2) echo "";
+        echo ')';
+        if (i != 2) echo ", ";
     }
+    echo '\n';
     
     return 0;
 }

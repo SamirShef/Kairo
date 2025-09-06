@@ -20,8 +20,6 @@ AST::StmtPtr Parser::parseStmt()
         else if (peek().type == TokenType::NEXT) return parseObjectChainStmt();
         else if (peek().type == TokenType::LBRACKET) return parseVarAsgnStmt(false);
         
-
-        
         return parseVarAsgnStmt(false);
     }
     else if (match(TokenType::THIS)) return parseThisStmt();
@@ -34,6 +32,8 @@ AST::StmtPtr Parser::parseStmt()
     else if (match(TokenType::CONTINUE)) return parseContinueStmt();
     else if (match(TokenType::ECHO)) return parseEchoStmt();
     else if (match(TokenType::CLASS)) return parseClassDeclStmt();
+    else if (match(TokenType::TRAIT)) return parseTraitDeclStmt();
+    else if (match(TokenType::IMPL)) return parseTraitImplStmt();
     else throw std::runtime_error("Unexpected token: '" + peek().value + "'" + " -> " + std::to_string(peek().line) + ":" + std::to_string(peek().column));
 }
 
@@ -338,6 +338,14 @@ AST::StmtPtr Parser::parseContinueStmt()
     return std::make_unique<AST::ContinueStmt>();
 }
 
+AST::StmtPtr Parser::parseEchoStmt()
+{
+    AST::ExprPtr expr = parseExpr();
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    return std::make_unique<AST::EchoStmt>(std::move(expr));
+}
+
 AST::StmtPtr Parser::parseClassDeclStmt()
 {
     Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
@@ -420,12 +428,73 @@ std::unique_ptr<AST::Member> Parser::parseConstructorDecl(AST::AccessModifier& a
     return std::make_unique<AST::ConstructorMember>(access, std::move(args), std::move(block));
 }
 
-AST::StmtPtr Parser::parseEchoStmt()
+AST::StmtPtr Parser::parseTraitDeclStmt()
 {
-    AST::ExprPtr expr = parseExpr();
+    Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+
+    consume(TokenType::LBRACE, "Expected '{'");
+
+    std::vector<std::unique_ptr<AST::Member>> methods;
+
+    while (!match(TokenType::RBRACE))
+    {
+        AST::AccessModifier access = AST::AccessModifier::PUBLIC;
+        if (match(TokenType::PUBLIC)) access = AST::AccessModifier::PUBLIC;
+        else if (match(TokenType::PRIVATE)) access = AST::AccessModifier::PRIVATE;
+
+        if (match(TokenType::FUNC)) methods.push_back(std::move(parseTraitMethodDecl(access)));
+        else throw std::runtime_error("Unsupported trait member declaration: '" + peek().value + "'");
+    }
+
+    return std::make_unique<AST::TraitDeclStmt>(id.value, std::move(methods));
+}
+
+AST::StmtPtr Parser::parseTraitImplStmt()
+{
+    Token traitName = consume(TokenType::IDENTIFIER, "Expected trait name");
+    consume(TokenType::FOR, "Expected 'for'");
+    
+    Type targetType = consumeType();
+
+    consume(TokenType::LBRACE, "Expected '{'");
+
+    std::vector<std::unique_ptr<AST::Member>> implementations;
+
+    while (!match(TokenType::RBRACE))
+    {
+        AST::AccessModifier access = AST::AccessModifier::PUBLIC;
+        if (match(TokenType::PUBLIC)) access = AST::AccessModifier::PUBLIC;
+        else if (match(TokenType::PRIVATE)) access = AST::AccessModifier::PRIVATE;
+
+        if (match(TokenType::FUNC)) implementations.push_back(std::move(parseMethodDecl(access)));
+        else throw std::runtime_error("Unsupported trait implementation member: '" + peek().value + "'");
+    }
+
+    return std::make_unique<AST::TraitImplStmt>(traitName.value, targetType.name, std::move(implementations));
+}
+
+std::unique_ptr<AST::Member> Parser::parseTraitMethodDecl(AST::AccessModifier& access)
+{
+    Type retType = Type(TypeValue::VOID, "void");
+    if (peek().type != TokenType::IDENTIFIER) retType = consumeType();
+    
+    Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+
+    consume(TokenType::LPAREN, "Expected '('");
+
+    AST::Arguments args;
+    while (!match(TokenType::RPAREN))
+    {
+        Type aType = consumeType();
+        Token aName = consume(TokenType::IDENTIFIER, "Expected identificator");
+        args.push_back(AST::Argument(aType, aName.value));
+
+        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
+    }
+    
     consume(TokenType::SEMICOLON, "Expected ';'");
 
-    return std::make_unique<AST::EchoStmt>(std::move(expr));
+    return std::make_unique<AST::TraitMethodMember>(access, id.value, retType, std::move(args));
 }
 
 Type Parser::consumeType()
@@ -618,7 +687,6 @@ AST::ExprPtr Parser::parsePrimary()
 
                 expr = std::make_unique<AST::ArrayExpr>(token.value, std::move(index));
                 
-                // После доступа к элементу массива проверяем возможность вызова методов
                 if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
             }
             
@@ -627,26 +695,61 @@ AST::ExprPtr Parser::parsePrimary()
             return expr;
         }
         case TokenType::INT_LIT:
+        {
             pos++;
-            return std::make_unique<AST::IntLiteral>(std::stoi(token.value));
+            AST::ExprPtr expr = std::make_unique<AST::IntLiteral>(std::stoi(token.value));
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+            return expr;
+        }
         case TokenType::FLOAT_LIT:
+        {
             pos++;
-            return std::make_unique<AST::FloatLiteral>(std::stof(token.value));
+            AST::ExprPtr expr = std::make_unique<AST::FloatLiteral>(std::stof(token.value));
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+            return expr;
+        }
         case TokenType::DOUBLE_LIT:
+        {
             pos++;
-            return std::make_unique<AST::DoubleLiteral>(std::stod(token.value));
+            AST::ExprPtr expr = std::make_unique<AST::DoubleLiteral>(std::stod(token.value));
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+            return expr;
+        }
         case TokenType::CHAR_LIT:
+        {
             pos++;
-            return std::make_unique<AST::CharLiteral>(token.value[0]);
+            AST::ExprPtr expr = std::make_unique<AST::CharLiteral>(token.value[0]);
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+            return expr;
+        }
         case TokenType::BOOL_LIT:
+        {
             pos++;
-            return std::make_unique<AST::BoolLiteral>(token.value == "false" ? false : true);
+            AST::ExprPtr expr = std::make_unique<AST::BoolLiteral>(token.value == "false" ? false : true);
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+            return expr;
+        }
         case TokenType::STRING_LIT:
+        {
             pos++;
-            return std::make_unique<AST::StringLiteral>(token.value);
+            AST::ExprPtr expr = std::make_unique<AST::StringLiteral>(token.value);
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+
+            return expr;
+        }
         case TokenType::LBRACKET:
+        {
             pos++;
-            return parseArrayLiteral();
+            AST::ExprPtr expr = parseArrayLiteral();
+            if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
+            
+            return expr;
+        }
         default:
             throw std::runtime_error("Unexpected token: '" + token.value + "'" + " -> " + std::to_string(token.line) + ":" + std::to_string(token.column));
     }

@@ -8,9 +8,9 @@ func int main()
     var string msg = "Hello world!";
     msg = "I love C/C++";
 
-    echo msg;
+    echo msg + "\n";
 
-    echo strConcat("Hello,", " world!");
+    echo strConcat("Hello,", " world!") + "\n";
     
     return 0;
 }

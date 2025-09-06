@@ -27,12 +27,20 @@ void SemanticAnalyzer::analyzeStmt(AST::Stmt& stmt)
     else if (dynamic_cast<AST::ContinueStmt*>(&stmt)) analyzeContinueStmt();
     else if (auto es = dynamic_cast<AST::EchoStmt*>(&stmt)) analyzeEchoStmt(*es);
     else if (auto cds = dynamic_cast<AST::ClassDeclStmt*>(&stmt)) analyzeClassDeclStmt(*cds);
+    else if (auto tds = dynamic_cast<AST::TraitDeclStmt*>(&stmt)) analyzeTraitDeclStmt(*tds);
+    else if (auto tis = dynamic_cast<AST::TraitImplStmt*>(&stmt)) analyzeTraitImplStmt(*tis);
 }
 
 void SemanticAnalyzer::analyzeVarDeclStmt(AST::VarDeclStmt& vds)
 {
     if (vds.expr)
         if (variables.size() == 1 && !isConstExpr(*vds.expr)) throw std::runtime_error("Global variable initializer must be a constant expression");
+
+    if (vds.type.type == TypeValue::CLASS)
+    {
+        if (traits.find(vds.type.name) != traits.end()) vds.type.type = TypeValue::TRAIT;
+        else if (classes.find(vds.type.name) == classes.end()) throw std::runtime_error("Type '" + vds.type.name + "' not found");
+    }
 
     if (variables.top().find(vds.name) != variables.top().end()) throw std::runtime_error("Variable '" + typeToString(vds.type) + " " + vds.name + "' already declared");
 
@@ -166,6 +174,21 @@ void SemanticAnalyzer::analyzeFieldAsgnStmt(AST::FieldAsgnStmt& stmt)
 
 void SemanticAnalyzer::analyzeFuncDeclStmt(AST::FuncDeclStmt& fds)
 {
+    if (fds.retType.type == TypeValue::CLASS)
+    {
+        if (traits.find(fds.retType.name) != traits.end()) fds.retType.type = TypeValue::TRAIT;
+        else if (classes.find(fds.retType.name) == classes.end()) throw std::runtime_error("Return type '" + fds.retType.name + "' not found");
+    }
+
+    for (auto& arg : fds.args)
+    {
+        if (arg.type.type == TypeValue::CLASS)
+        {
+            if (traits.find(arg.type.name) != traits.end()) arg.type.type = TypeValue::TRAIT;
+            else if (classes.find(arg.type.name) == classes.end()) throw std::runtime_error("Parameter type '" + arg.type.name + "' not found");
+        }
+    }
+
     auto& overloads = functions[fds.name];
     for (const auto& existing : overloads)
     {
@@ -516,6 +539,114 @@ void SemanticAnalyzer::analyzeConstructorMember(std::string className, std::vect
     functionReturnTypes.pop();
 }
 
+void SemanticAnalyzer::analyzeTraitDeclStmt(AST::TraitDeclStmt& tds)
+{
+    if (traits.find(tds.name) != traits.end()) throw std::runtime_error("Trait '" + tds.name + "' already declared");
+
+    TraitInfo traitInfo;
+    
+    for (auto& method : tds.methods)
+        if (auto traitMethod = dynamic_cast<AST::TraitMethodMember*>(method.get()))
+            analyzeTraitMethodMember(tds.name, traitInfo.methods, *traitMethod);
+    
+    traits[tds.name] = std::move(traitInfo);
+}
+
+void SemanticAnalyzer::analyzeTraitImplStmt(AST::TraitImplStmt& tis)
+{
+    if (traits.find(tis.traitName) == traits.end()) throw std::runtime_error("Trait '" + tis.traitName + "' not found");
+    
+    bool isBuiltinType = false;
+    for (auto& typeValue : {TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::CHAR, TypeValue::BOOL, TypeValue::STRING})
+    {
+        if (tis.className == typeToString(Type(typeValue, "")))
+        {
+            isBuiltinType = true;
+            break;
+        }
+    }
+    
+    if (!isBuiltinType && classes.find(tis.className) == classes.end()) throw std::runtime_error("Type '" + tis.className + "' not found");
+    
+    TraitInfo& traitInfo = traits[tis.traitName];
+    TraitImplInfo implInfo;
+    implInfo.traitName = tis.traitName;
+    implInfo.className = tis.className;
+    
+    for (const auto& traitMethod : traitInfo.methods)
+    {
+        bool found = false;
+        for (auto& impl : tis.implementations)
+        {
+            if (auto method = dynamic_cast<AST::MethodMember*>(impl.get()))
+            {
+                if (method->name == traitMethod->name)
+                {
+                    if (method->retType != traitMethod->retType) throw std::runtime_error("Method '" + method->name + "' return type mismatch in trait implementation");
+                    
+                    if (method->args.size() != traitMethod->args.size()) throw std::runtime_error("Method '" + method->name + "' argument count mismatch in trait implementation");
+                    
+                    for (size_t i = 0; i < method->args.size(); i++)
+                        if (method->args[i].type != traitMethod->args[i].type)
+                            throw std::runtime_error("Method '" + method->name + "' argument type mismatch in trait implementation");
+                    
+                    AST::Block blockCopy;
+                    for (const auto& stmt : method->block) blockCopy.push_back(std::unique_ptr<AST::Stmt>(stmt->clone()));
+                    
+                    implInfo.implementations.push_back(std::make_unique<AST::MethodMember>(method->access, method->name, method->retType, method->args, std::move(blockCopy)));
+                    found = true;
+
+                    break;
+                }
+            }
+        }
+        
+        if (!found) throw std::runtime_error("Trait method '" + traitMethod->name + "' not implemented for class '" + tis.className + "'");
+    }
+    
+    traitImplementations[tis.className].push_back(std::move(implInfo));
+    
+    if (!isBuiltinType)
+    {
+        auto classIt = classes.find(tis.className);
+        if (classIt != classes.end())
+        {
+            for (const auto& impl : tis.implementations)
+            {
+                if (auto method = dynamic_cast<AST::MethodMember*>(impl.get()))
+                {
+                    bool exists = false;
+                    for (const auto& existingMethod : classIt->second.methods)
+                    {
+                        if (existingMethod->name == method->name)
+                        {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!exists)
+                    {
+                        AST::Block blockCopy;
+                        for (const auto& stmt : method->block) blockCopy.push_back(std::unique_ptr<AST::Stmt>(stmt->clone()));
+                        
+                        classIt->second.methods.push_back(std::make_unique<AST::MethodMember>(method->access, method->name, method->retType, method->args, std::move(blockCopy)));
+                    }
+                }
+            }
+        }
+    }
+}
+
+void SemanticAnalyzer::analyzeTraitMethodMember(std::string traitName, std::vector<std::unique_ptr<AST::TraitMethodMember>>& members, AST::TraitMethodMember& method)
+{
+    for (const auto& existingMethod : members)
+        if (existingMethod->name == method.name)
+            throw std::runtime_error("Method '" + method.name + "' already declared in trait '" + traitName + "'");
+    
+    members.push_back(std::make_unique<AST::TraitMethodMember>(method.access, method.name, method.retType, method.args));
+}
+
 Type SemanticAnalyzer::analyzeExpr(const AST::Expr& expr)
 {
     if (auto lit = dynamic_cast<const AST::Literal*>(&expr)) return analyzeLiteral(*lit);
@@ -807,6 +938,73 @@ Type SemanticAnalyzer::analyzeFieldAccessExpr(const AST::FieldAccessExpr& expr)
 Type SemanticAnalyzer::analyzeMethodCallExpr(const AST::MethodCallExpr& expr)
 {
     Type objectType = analyzeExpr(*expr.object);
+    
+    bool isBuiltinType = false;
+    for (auto& typeValue : {TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::CHAR, TypeValue::BOOL, TypeValue::STRING})
+    {
+        if (objectType.type == typeValue)
+        {
+            isBuiltinType = true;
+            break;
+        }
+    }
+    
+    if (isBuiltinType)
+    {
+        auto traitImplIt = traitImplementations.find(objectType.name);
+        if (traitImplIt != traitImplementations.end())
+        {
+            std::vector<Type> argTypes;
+            argTypes.reserve(expr.args.size());
+            for (const auto& a : expr.args) argTypes.push_back(analyzeExpr(*a));
+            
+            for (const auto& implInfo : traitImplIt->second)
+            {
+                for (const auto& impl : implInfo.implementations)
+                {
+                    if (auto method = dynamic_cast<const AST::MethodMember*>(impl.get()))
+                    {
+                        if (method->name != expr.name) continue;
+                        if (method->args.size() != argTypes.size()) continue;
+
+                        bool ok = true;
+                        for (size_t i = 0; i < argTypes.size(); i++) if (!canImplicitlyCast(argTypes[i], method->args[i].type)) { ok = false; break; }
+
+                        if (ok) return method->retType;
+                    }
+                }
+            }
+        }
+
+        throw std::runtime_error("No matching method '" + expr.name + "' found for builtin type '" + objectType.name + "'");
+    }
+    
+    // Обрабатываем вызовы методов у трейтов
+    if (objectType.type == TypeValue::TRAIT)
+    {
+        std::string traitName = objectType.name;
+        auto traitIt = traits.find(traitName);
+        if (traitIt == traits.end()) throw std::runtime_error("Trait '" + traitName + "' not found");
+
+        std::vector<Type> argTypes;
+        argTypes.reserve(expr.args.size());
+        for (const auto& a : expr.args) argTypes.push_back(analyzeExpr(*a));
+
+        for (const auto& method : traitIt->second.methods)
+        {
+            if (method->name != expr.name) continue;
+            if (method->args.size() != argTypes.size()) continue;
+
+            bool ok = true;
+            for (size_t i = 0; i < argTypes.size(); i++)
+                if (!canImplicitlyCast(argTypes[i], method->args[i].type)) { ok = false; break; }
+
+            if (ok) return method->retType;
+        }
+
+        throw std::runtime_error("No matching method '" + expr.name + "' found in trait '" + traitName + "'");
+    }
+    
     if (objectType.type != TypeValue::CLASS) throw std::runtime_error("Method call on non-class type");
 
     std::string className = objectType.name;
@@ -834,17 +1032,42 @@ Type SemanticAnalyzer::analyzeMethodCallExpr(const AST::MethodCallExpr& expr)
 
 Type SemanticAnalyzer::analyzeThisExpr(const AST::ThisExpr& expr)
 {
-    return Type(TypeValue::CLASS, classesStack.top());
+    if (classesStack.empty()) throw std::runtime_error("'this' used outside of class method");
+    
+    std::string typeName = classesStack.top();
+    
+    for (auto& typeValue : {TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::CHAR, TypeValue::BOOL, TypeValue::STRING})
+        if (typeName == typeToString(Type(typeValue, "")))
+            return Type(typeValue, typeName);
+    
+    return Type(TypeValue::CLASS, typeName);
 }
 
 bool SemanticAnalyzer::canImplicitlyCast(Type l, Type r)
 {
     if (l == r) return true;
 
-    if (l.type == TypeValue::CLASS || r.type == TypeValue::CLASS) return l.name == r.name;
+    if (l.type == TypeValue::CLASS && r.type == TypeValue::CLASS) return l.name == r.name;
+    if (l.type == TypeValue::TRAIT && r.type == TypeValue::TRAIT) return l.name == r.name;
+    
+    if (l.type == TypeValue::CLASS && r.type == TypeValue::TRAIT)
+    {
+        auto traitImplIt = traitImplementations.find(l.name);
+        if (traitImplIt != traitImplementations.end())
+            for (const auto& implInfo : traitImplIt->second)
+                if (implInfo.traitName == r.name) return true;
+
+        return false;
+    }
+    
+    if (l.type == TypeValue::TRAIT && r.type == TypeValue::CLASS) return false;
 
     if (castsTable.find(l.type) != castsTable.end())
         if (std::find(castsTable[l.type].begin(), castsTable[l.type].end(), r.type) != castsTable[l.type].end())
+            return true;
+    
+    if (castsTable.find(r.type) != castsTable.end())
+        if (std::find(castsTable[r.type].begin(), castsTable[r.type].end(), l.type) != castsTable[r.type].end())
             return true;
 
     return false;
@@ -871,6 +1094,7 @@ std::string typeToString(Type type)
         case TypeValue::STRING: return "string";
         case TypeValue::VOID: return "void";
         case TypeValue::CLASS: return "class <" + type.name + ">";
+        case TypeValue::TRAIT: return "trait <" + type.name + ">";
         case TypeValue::ARRAY: 
             if (type.elementType) return typeToString(*type.elementType) + "[]";
             

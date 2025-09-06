@@ -28,11 +28,14 @@ private:
     AST::StmtPtr parseForLoopStmt();
     AST::StmtPtr parseBreakStmt();
     AST::StmtPtr parseContinueStmt();
+    AST::StmtPtr parseEchoStmt();
     AST::StmtPtr parseClassDeclStmt();
     std::unique_ptr<AST::Member> parseFieldDecl(AST::AccessModifier&);
     std::unique_ptr<AST::Member> parseMethodDecl(AST::AccessModifier&);
     std::unique_ptr<AST::Member> parseConstructorDecl(AST::AccessModifier&);
-    AST::StmtPtr parseEchoStmt();
+    AST::StmtPtr parseTraitDeclStmt();
+    AST::StmtPtr parseTraitImplStmt();
+    std::unique_ptr<AST::Member> parseTraitMethodDecl(AST::AccessModifier&);
 
     AST::ExprPtr createCompoundAssignmentOperator(Token&);
     AST::ExprPtr parseExpr();

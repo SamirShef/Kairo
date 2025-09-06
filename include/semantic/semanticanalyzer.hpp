@@ -54,6 +54,52 @@ private:
     };
     std::map<std::string, ClassInfo> classes;
     std::stack<std::string> classesStack;
+
+    struct TraitInfo
+    {
+        std::vector<std::unique_ptr<AST::TraitMethodMember>> methods;
+
+        TraitInfo() = default;
+        ~TraitInfo() = default;
+
+        TraitInfo(const TraitInfo&) = delete;
+        TraitInfo& operator=(const TraitInfo&) = delete;
+
+        TraitInfo(TraitInfo&& other) noexcept : methods(std::move(other.methods)) {}
+            
+        TraitInfo& operator=(TraitInfo&& other) noexcept
+        {
+            methods = std::move(other.methods);
+
+            return *this;
+        }
+    };
+    std::map<std::string, TraitInfo> traits;
+
+    struct TraitImplInfo
+    {
+        std::string traitName;
+        std::string className;
+        std::vector<std::unique_ptr<AST::MethodMember>> implementations;
+
+        TraitImplInfo() = default;
+        ~TraitImplInfo() = default;
+
+        TraitImplInfo(const TraitImplInfo&) = delete;
+        TraitImplInfo& operator=(const TraitImplInfo&) = delete;
+
+        TraitImplInfo(TraitImplInfo&& other) noexcept : traitName(std::move(other.traitName)), className(std::move(other.className)), implementations(std::move(other.implementations)) {}
+            
+        TraitImplInfo& operator=(TraitImplInfo&& other) noexcept
+        {
+            traitName = std::move(other.traitName);
+            className = std::move(other.className);
+            implementations = std::move(other.implementations);
+
+            return *this;
+        }
+    };
+    std::map<std::string, std::vector<TraitImplInfo>> traitImplementations;
     
     std::map<TypeValue, std::vector<TypeValue>> castsTable =
     {
@@ -82,6 +128,9 @@ private:
     void analyzeFieldMember(std::vector<std::unique_ptr<AST::FieldMember>>& members, AST::FieldMember&);
     void analyzeMethodMember(std::string, std::vector<std::unique_ptr<AST::MethodMember>>& members, AST::MethodMember&);
     void analyzeConstructorMember(std::string, std::vector<std::unique_ptr<AST::ConstructorMember>>& members, AST::ConstructorMember&);
+    void analyzeTraitDeclStmt(AST::TraitDeclStmt&);
+    void analyzeTraitImplStmt(AST::TraitImplStmt&);
+    void analyzeTraitMethodMember(std::string, std::vector<std::unique_ptr<AST::TraitMethodMember>>& members, AST::TraitMethodMember&);
 
     Type analyzeExpr(const AST::Expr&);
     Type analyzeBinaryExpr(const AST::BinaryExpr&);

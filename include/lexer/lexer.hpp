@@ -16,6 +16,7 @@ private:
     Token tokenizeNumberLiteral();
     Token tokenizeCharLiteral();
     Token tokenizeOperator();
+    char processEscapeSequence();
 
     const char peek();
     const char peek(int);
@@ -23,6 +24,7 @@ private:
 
     void scipComments();
     void scipMultilineComments();
+    std::string encodeUtf8(int unicode);
 
 public:
     Lexer(std::string);

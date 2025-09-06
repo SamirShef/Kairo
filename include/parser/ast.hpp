@@ -1,6 +1,7 @@
 #pragma once
 #include "../values/value.hpp"
 #include "../lexer/token.hpp"
+#include <string>
 #include <vector>
 
 namespace AST
@@ -151,7 +152,7 @@ namespace AST
         std::string name;
         Type elementType;
         ExprPtr size;
-        ExprPtr initializer; // Может быть nullptr для инициализации по умолчанию
+        ExprPtr initializer;
 
         ArrayDeclStmt(std::string n, Type et, ExprPtr s, ExprPtr init = nullptr) : name(n), elementType(et), size(std::move(s)), initializer(std::move(init)) {}
 
@@ -435,6 +436,70 @@ public:
                 }
             }
             return new ClassDeclStmt(name, std::move(membersCopy));
+        }
+    };
+
+    class TraitMethodMember : public Member
+    {
+    public:
+        Type retType;
+        Arguments args;
+
+        TraitMethodMember(AccessModifier am, std::string n, Type rt, Arguments a) : Member(am, n), retType(rt), args(std::move(a)) {}
+        
+        ~TraitMethodMember() override = default;
+        TraitMethodMember* clone() const override
+        {
+            return new TraitMethodMember(access, name, retType, args);
+        }
+    };
+
+    class TraitDeclStmt : public Stmt
+    {
+    public:
+        std::string name;
+        std::vector<std::unique_ptr<Member>> methods;
+
+        TraitDeclStmt(std::string n, std::vector<std::unique_ptr<Member>> m) : name(n), methods(std::move(m)) {}
+
+        ~TraitDeclStmt() override = default;
+        TraitDeclStmt* clone() const override
+        {
+            std::vector<std::unique_ptr<Member>> methodsCopy;
+            for (const auto& method : methods)
+                if (auto traitMethod = dynamic_cast<const TraitMethodMember*>(method.get()))
+                    methodsCopy.push_back(std::make_unique<TraitMethodMember>(traitMethod->access, traitMethod->name, traitMethod->retType, traitMethod->args));
+
+            return new TraitDeclStmt(name, std::move(methodsCopy));
+        }
+    };
+
+    class TraitImplStmt : public Stmt
+    {
+    public:
+        std::string traitName;
+        std::string className;
+        std::vector<std::unique_ptr<Member>> implementations;
+
+        TraitImplStmt(std::string tn, std::string cn, std::vector<std::unique_ptr<Member>> impl) : traitName(tn), className(cn), implementations(std::move(impl)) {}
+
+        ~TraitImplStmt() override = default;
+        TraitImplStmt* clone() const override
+        {
+            std::vector<std::unique_ptr<Member>> implCopy;
+            for (const auto& impl : implementations)
+            {
+                if (auto method = dynamic_cast<const MethodMember*>(impl.get()))
+                {
+                    Block blockCopy;
+                    for (const auto& stmt : method->block)
+                        blockCopy.push_back(std::unique_ptr<Stmt>(stmt->clone()));
+                    
+                    implCopy.push_back(std::make_unique<MethodMember>(method->access, method->name, method->retType, method->args, std::move(blockCopy)));
+                }
+            }
+            
+            return new TraitImplStmt(traitName, className, std::move(implCopy));
         }
     };
 

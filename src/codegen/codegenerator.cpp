@@ -11,6 +11,8 @@
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 
+std::string typeToString(Type type);
+
 CodeGenerator::CodeGenerator(const std::string& moduleName) : context(), builder(context), module(std::make_unique<llvm::Module>(moduleName, context))
 {
     scopeStack.emplace(std::map<std::string, llvm::Value*>{});
@@ -74,7 +76,7 @@ std::string CodeGenerator::resolveClassName(const AST::Expr& expr)
             {
                 if (it->second.type == TypeValue::CLASS) return it->second.name;
 
-                throw std::runtime_error("Variable '" + var->name + "' is not a class instance");
+                return it->second.name;
             }
 
             copy.pop();
@@ -99,19 +101,19 @@ std::string CodeGenerator::resolveClassName(const AST::Expr& expr)
             {
                 if (it->second.type == TypeValue::ARRAY && it->second.elementType)
                 {
-                    if (it->second.elementType->type == TypeValue::CLASS)
-                    {
-                        return it->second.elementType->name;
-                    }
-                    throw std::runtime_error("Array element type is not a class: " + array->name);
+                    if (it->second.elementType->type == TypeValue::CLASS) return it->second.elementType->name;
+                    return it->second.elementType->name;
                 }
+
                 throw std::runtime_error("Variable '" + array->name + "' is not an array");
             }
+
             copy.pop();
         }
         
         throw std::runtime_error("Array variable '" + array->name + "' not found");
     }
+    else if (auto literal = dynamic_cast<const AST::Literal*>(&expr)) return literal->type.name;
 
     throw std::runtime_error("Unable to resolve class name for expression");
 }
@@ -143,6 +145,7 @@ llvm::Type* CodeGenerator::getLLVMType(Type type)
 
             return llvm::PointerType::get(it->second.type, 0);
         }
+        case TypeValue::TRAIT: return llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
         default: throw std::runtime_error("Unknown type in getLLVMType");
     }
 }
@@ -196,6 +199,8 @@ void CodeGenerator::generateStmt(const AST::Stmt& stmt)
     else if (dynamic_cast<const AST::ContinueStmt*>(&stmt)) generateContinueStmt();
     else if (auto es = dynamic_cast<const AST::EchoStmt*>(&stmt)) generateEchoStmt(*es);
     else if (auto cds = dynamic_cast<const AST::ClassDeclStmt*>(&stmt)) generateClassDeclStmt(*cds);
+    else if (auto tds = dynamic_cast<const AST::TraitDeclStmt*>(&stmt)) generateTraitDeclStmt(*tds);
+    else if (auto tis = dynamic_cast<const AST::TraitImplStmt*>(&stmt)) generateTraitImplStmt(*tis);
 }
 
 void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
@@ -626,21 +631,21 @@ void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
     std::string formatStr;
     llvm::Value* promoted = value;
 
-    if (value->getType()->isIntegerTy(32)) formatStr = "%d\n";
+    if (value->getType()->isIntegerTy(32)) formatStr = "%d";
     else if (value->getType()->isFloatTy())
     {
-        formatStr = "%f\n";
+        formatStr = "%f";
         promoted = builder.CreateFPExt(value, llvm::Type::getDoubleTy(context));
     }
-    else if (value->getType()->isDoubleTy()) formatStr = "%lf\n";
+    else if (value->getType()->isDoubleTy()) formatStr = "%lf";
     else if (value->getType()->isIntegerTy(8))
     {
-        formatStr = "%c\n";
+        formatStr = "%c";
         promoted = builder.CreateSExt(value, llvm::Type::getInt8Ty(context));
     }
     else if (value->getType()->isIntegerTy(1))
     {
-        formatStr = "%s\n";
+        formatStr = "%s";
 
         llvm::GlobalVariable* trueGV = builder.CreateGlobalString("true", "true_str");
         llvm::GlobalVariable* falseGV = builder.CreateGlobalString("false", "false_str");
@@ -653,11 +658,11 @@ void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
     }
     else if (value->getType()->isPointerTy())
     {
-        formatStr = "%s\n";
+        formatStr = "%s";
         llvm::Value* emptyPtr = builder.CreateGlobalString("", "empty_str");
         promoted = builder.CreateSelect(builder.CreateICmpNE(value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(value->getType()))), value, emptyPtr);
     }
-    else formatStr = "%d\n";
+    else formatStr = "%d";
     
     llvm::GlobalVariable* formatGV = builder.CreateGlobalString(formatStr, "printf_format");
     llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
@@ -891,23 +896,41 @@ llvm::Value* CodeGenerator::generateBinaryExpr(const AST::BinaryExpr& binaryExpr
         case TokenType::MODULO:
             return builder.CreateSRem(left, right, "modtmp");
         case TokenType::EQUALS:
-            if (left->getType()->isIntegerTy()) return builder.CreateICmpEQ(left, right, "eqtmp");
-            else return builder.CreateFCmpOEQ(left, right, "eqtmp");
+            if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) return builder.CreateICmpEQ(left, right, "eqtmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOEQ(left, right, "eqtmp");
+            else if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOEQ(builder.CreateSIToFP(left, right->getType()), right, "eqtmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isIntegerTy()) return builder.CreateFCmpOEQ(left, builder.CreateSIToFP(right, left->getType()), "eqtmp");
+            else return builder.CreateICmpEQ(left, right, "eqtmp");
         case TokenType::NOT_EQUALS:
-            if (left->getType()->isIntegerTy()) return builder.CreateICmpNE(left, right, "netmp");
-            else return builder.CreateFCmpONE(left, right, "netmp");
+            if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) return builder.CreateICmpNE(left, right, "netmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpONE(left, right, "netmp");
+            else if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpONE(builder.CreateSIToFP(left, right->getType()), right, "netmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isIntegerTy()) return builder.CreateFCmpONE(left, builder.CreateSIToFP(right, left->getType()), "netmp");
+            else return builder.CreateICmpNE(left, right, "netmp");
         case TokenType::GREATER:
-            if (left->getType()->isIntegerTy()) return builder.CreateICmpSGT(left, right, "gttmp");
-            else return builder.CreateFCmpOGT(left, right, "gttmp");
+            if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) return builder.CreateICmpSGT(left, right, "gttmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOGT(left, right, "gttmp");
+            else if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOGT(builder.CreateSIToFP(left, right->getType()), right, "gttmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isIntegerTy()) return builder.CreateFCmpOGT(left, builder.CreateSIToFP(right, left->getType()), "gttmp");
+            else return builder.CreateICmpSGT(left, right, "gttmp");
         case TokenType::GREATER_EQUALS:
-            if (left->getType()->isIntegerTy()) return builder.CreateICmpSGE(left, right, "getmp");
-            else return builder.CreateFCmpOGE(left, right, "getmp");
+            if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) return builder.CreateICmpSGE(left, right, "getmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOGE(left, right, "getmp");
+            else if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOGE(builder.CreateSIToFP(left, right->getType()), right, "getmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isIntegerTy()) return builder.CreateFCmpOGE(left, builder.CreateSIToFP(right, left->getType()), "getmp");
+            else return builder.CreateICmpSGE(left, right, "getmp");
         case TokenType::LESS:
-            if (left->getType()->isIntegerTy()) return builder.CreateICmpSLT(left, right, "lttmp");
-            else return builder.CreateFCmpOLT(left, right, "lttmp");
+            if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) return builder.CreateICmpSLT(left, right, "lttmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOLT(left, right, "lttmp");
+            else if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOLT(builder.CreateSIToFP(left, right->getType()), right, "lttmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isIntegerTy()) return builder.CreateFCmpOLT(left, builder.CreateSIToFP(right, left->getType()), "lttmp");
+            else return builder.CreateICmpSLT(left, right, "lttmp");
         case TokenType::LESS_EQUALS:
-            if (left->getType()->isIntegerTy()) return builder.CreateICmpSLE(left, right, "letmp");
-            else return builder.CreateFCmpOLE(left, right, "letmp");
+            if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) return builder.CreateICmpSLE(left, right, "letmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOLE(left, right, "letmp");
+            else if (left->getType()->isIntegerTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOLE(builder.CreateSIToFP(left, right->getType()), right, "letmp");
+            else if (left->getType()->isFloatingPointTy() && right->getType()->isIntegerTy()) return builder.CreateFCmpOLE(left, builder.CreateSIToFP(right, left->getType()), "letmp");
+            else return builder.CreateICmpSLE(left, right, "letmp");
         case TokenType::AND: return builder.CreateAnd(left, right, "andtmp");
         case TokenType::OR: return builder.CreateOr(left, right, "ortmp");
         default: throw std::runtime_error("Unknown binary operator in generateBinaryExpr");
@@ -1077,6 +1100,7 @@ std::string CodeGenerator::mangleFunction(const std::string& name, const std::ve
             case TypeValue::STRING: mangled += "s"; break;
             case TypeValue::VOID: mangled += "v"; break;
             case TypeValue::CLASS: mangled += std::string("C") + t.name; break;
+            case TypeValue::TRAIT: mangled += std::string("T") + t.name; break;
             default: mangled += "u"; break;
         }
 
@@ -1191,6 +1215,99 @@ llvm::Value* CodeGenerator::generateMethodCallExpr(const AST::MethodCallExpr& ex
     
     std::string className = resolveClassName(*expr.object);
 
+    bool isBuiltinType = false;
+    TypeValue builtinTypeValue = TypeValue::INT;
+    for (auto& typeValue : {TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::CHAR, TypeValue::BOOL, TypeValue::STRING})
+    {
+        if (className == typeToString(Type(typeValue, "")))
+        {
+            isBuiltinType = true;
+            builtinTypeValue = typeValue;
+            break;
+        }
+    }
+    
+    if (isBuiltinType)
+    {
+        auto traitImplIt = traitImplementations.find(className);
+        if (traitImplIt != traitImplementations.end())
+        {
+            for (const auto& implInfo : traitImplIt->second)
+            {
+                auto methodIt = implInfo.implementations.find(expr.name);
+                if (methodIt != implInfo.implementations.end())
+                {
+                    llvm::Function* method = methodIt->second;
+                    auto* fnty = method->getFunctionType();
+                    if (fnty->getNumParams() != expr.args.size() + 1) continue;
+
+                    std::vector<llvm::Value*> args;
+                    args.reserve(expr.args.size() + 1);
+                    args.push_back(object);
+
+                    bool ok = true;
+                    for (size_t i = 0; i < expr.args.size(); i++)
+                    {
+                        llvm::Value* val = generateExpr(*expr.args[i]);
+                        llvm::Type* expected = fnty->getParamType(i + 1);
+                        if (!expected->isPointerTy()) val = castToExpectedIfNeeded(val, expected);
+                        if (val->getType() != expected) { ok = false; break; }
+                        args.push_back(val);
+                    }
+
+                    if (!ok) continue;
+
+                    return builder.CreateCall(method, args);
+                }
+            }
+        }
+
+        throw std::runtime_error("Method not found for builtin type: " + expr.name);
+    }
+
+    auto traitIt = traits.find(className);
+    if (traitIt != traits.end())
+    {
+        
+        for (const auto& implPair : traitImplementations)
+        {
+            const std::string& implClassName = implPair.first;
+            const auto& impls = implPair.second;
+            
+            for (const auto& implInfo : impls)
+            {
+                if (implInfo.traitName == className)
+                {
+                    auto methodIt = implInfo.implementations.find(expr.name);
+                    if (methodIt != implInfo.implementations.end())
+                    {
+                        llvm::Function* method = methodIt->second;
+                        auto* fnty = method->getFunctionType();
+                        if (fnty->getNumParams() != expr.args.size() + 1) continue;
+
+                        std::vector<llvm::Value*> args;
+                        args.reserve(expr.args.size() + 1);
+                        args.push_back(object);
+
+                        bool ok = true;
+                        for (size_t i = 0; i < expr.args.size(); i++)
+                        {
+                            llvm::Value* val = generateExpr(*expr.args[i]);
+                            llvm::Type* expected = fnty->getParamType(i + 1);
+                            if (!expected->isPointerTy()) val = castToExpectedIfNeeded(val, expected);
+                            if (val->getType() != expected) { ok = false; break; }
+                            args.push_back(val);
+                        }
+
+                        if (ok) return builder.CreateCall(method, args);
+                    }
+                }
+            }
+        }
+        
+        throw std::runtime_error("No implementation found for trait method: " + expr.name);
+    }
+
     auto it = classes.find(className);
     if (it == classes.end()) throw std::runtime_error("Class not found: " + className);
 
@@ -1210,7 +1327,7 @@ llvm::Value* CodeGenerator::generateMethodCallExpr(const AST::MethodCallExpr& ex
         for (size_t i = 0; i < expr.args.size(); i++)
         {
             llvm::Value* val = generateExpr(*expr.args[i]);
-            llvm::Type* expected = fnty->getParamType(static_cast<unsigned>(i + 1));
+            llvm::Type* expected = fnty->getParamType(i + 1);
             if (!expected->isPointerTy()) val = castToExpectedIfNeeded(val, expected);
             if (val->getType() != expected) { ok = false; break; }
             args.push_back(val);
@@ -1263,6 +1380,133 @@ void CodeGenerator::generateConstructorDecl(const AST::ConstructorMember& ctor)
     if (builder.GetInsertBlock()->getTerminator() == nullptr) builder.CreateRetVoid();
 
     popScope();
+}
+
+void CodeGenerator::generateTraitDeclStmt(const AST::TraitDeclStmt& stmt)
+{
+    TraitInfo traitInfo;
+    
+    for (const auto& method : stmt.methods)
+    {
+        if (auto traitMethod = dynamic_cast<const AST::TraitMethodMember*>(method.get()))
+        {
+            std::vector<llvm::Type*> paramTypes;
+            paramTypes.push_back(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0));
+            
+            for (const auto& arg : traitMethod->args) paramTypes.push_back(getLLVMType(arg.type));
+            
+            llvm::Type* retType = getLLVMType(traitMethod->retType);
+            llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+            
+            std::string mangledName = mangleFunction(traitMethod->name, traitMethod->args);
+            llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, *module);
+            
+            traitInfo.methods[traitMethod->name].push_back(func);
+        }
+    }
+    
+    traits[stmt.name] = std::move(traitInfo);
+}
+
+void CodeGenerator::generateTraitImplStmt(const AST::TraitImplStmt& stmt)
+{
+    TraitImplInfo implInfo;
+    implInfo.traitName = stmt.traitName;
+    implInfo.className = stmt.className;
+    
+    bool isBuiltinType = false;
+    TypeValue builtinTypeValue;
+    for (auto& typeValue : {TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::CHAR, TypeValue::BOOL, TypeValue::STRING})
+    {
+        if (stmt.className == typeToString(Type(typeValue, "")))
+        {
+            isBuiltinType = true;
+            builtinTypeValue = typeValue;
+            break;
+        }
+    }
+    
+    for (const auto& impl : stmt.implementations)
+    {
+        if (auto method = dynamic_cast<const AST::MethodMember*>(impl.get()))
+        {
+            std::vector<llvm::Type*> paramTypes;
+            
+            if (isBuiltinType) paramTypes.push_back(getLLVMType(Type(builtinTypeValue, stmt.className)));
+            else paramTypes.push_back(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0));
+            
+            for (const auto& arg : method->args) paramTypes.push_back(getLLVMType(arg.type));
+            
+            llvm::Type* retType = getLLVMType(method->retType);
+            llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
+            
+            std::string mangledName = stmt.className + "_" + mangleFunction(method->name, method->args);
+            llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, *module);
+            
+            llvm::BasicBlock* entryBlock = llvm::BasicBlock::Create(context, "entry", func);
+            builder.SetInsertPoint(entryBlock);
+            
+            classesStack.push(stmt.className);
+            
+            setNamedValue("this", func->getArg(0));
+            
+            pushScope();
+            
+            auto argIt = func->arg_begin();
+            std::advance(argIt, 1);
+            
+            for (size_t i = 0; i < method->args.size() && argIt != func->arg_end(); i++, argIt++)
+            {
+                llvm::Argument& arg = *argIt;
+                arg.setName(method->args[i].name);
+                
+                llvm::AllocaInst* alloca = builder.CreateAlloca(arg.getType(), nullptr, method->args[i].name + ".addr");
+                builder.CreateStore(&arg, alloca);
+                setNamedValue(method->args[i].name, alloca);
+                typesScopeStack.top()[method->args[i].name] = method->args[i].type;
+            }
+            
+            for (const auto& stmtPtr : method->block) generateStmt(*stmtPtr);
+            popScope();
+            
+            classesStack.pop();
+            
+            if (method->retType.type == TypeValue::VOID) builder.CreateRetVoid();
+            
+            implInfo.implementations[method->name] = func;
+        }
+    }
+    
+    if (!isBuiltinType)
+    {
+        auto classIt = classes.find(stmt.className);
+        if (classIt != classes.end())
+        {
+            for (const auto& impl : stmt.implementations)
+            {
+                if (auto method = dynamic_cast<const AST::MethodMember*>(impl.get()))
+                {
+                    bool exists = false;
+                    for (const auto& existingMethod : classIt->second.methods[method->name])
+                    {
+                        if (existingMethod != nullptr)
+                        {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!exists)
+                    {
+                        auto implIt = implInfo.implementations.find(method->name);
+                        if (implIt != implInfo.implementations.end()) classIt->second.methods[method->name].push_back(implIt->second);
+                    }
+                }
+            }
+        }
+    }
+    
+    traitImplementations[stmt.className].push_back(std::move(implInfo));
 }
 
 llvm::Value* CodeGenerator::generateThisExpr(const AST::ThisExpr&)

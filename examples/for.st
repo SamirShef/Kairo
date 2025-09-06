@@ -5,6 +5,7 @@ func int main()
         if (i == 5) continue;
 
         echo i;
+        echo '\n';
     }
 
     return 0;

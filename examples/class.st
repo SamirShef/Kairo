@@ -32,11 +32,12 @@ class Person
 
     pub func void print()
     {
-        if (isMale) echo "Male";
-        else echo "Female";
+        if (isMale) echo "Male ";
+        else echo "Female ";
 
-        echo name;
+        echo name + ": ";
         echo age;
+        echo '\n';
     }
 }
 

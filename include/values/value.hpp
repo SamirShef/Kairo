@@ -6,7 +6,7 @@
 
 enum class TypeValue
 {
-    INT, FLOAT, DOUBLE, CHAR, BOOL, STRING, VOID, CLASS, ARRAY
+    INT, FLOAT, DOUBLE, CHAR, BOOL, STRING, VOID, CLASS, ARRAY, TRAIT
 };
 
 struct Type

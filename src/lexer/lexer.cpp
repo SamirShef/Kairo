@@ -1,5 +1,6 @@
 #include "../../include/lexer/lexer.hpp"
 #include <stdexcept>
+#include <vector>
 
 Lexer::Lexer(const std::string initSource)
 {
@@ -31,6 +32,8 @@ Lexer::Lexer(const std::string initSource)
     keywords["this"] = TokenType::THIS;
     keywords["constructor"] = TokenType::CONSTRUCTOR;
     keywords["echo"] = TokenType::ECHO;
+    keywords["trait"] = TokenType::TRAIT;
+    keywords["impl"] = TokenType::IMPL;
 }
 
 std::vector<Token> Lexer::tokenize()
@@ -81,7 +84,58 @@ Token Lexer::tokenizeStringLiteral()
     int tmpColumn = column;
 
     advance();
-    while (pos < source.length() && peek() != '"') lit += advance();
+    while (pos < source.length() && peek() != '"') 
+    {
+        if (peek() == '\\')
+        {
+            advance();
+            if (pos >= source.length()) throw std::runtime_error("Invalid escape sequence in string literal");
+            
+            char escapeChar = peek();
+            if (escapeChar == 'u')
+            {
+                advance();
+                if (pos + 4 > source.length()) throw std::runtime_error("Invalid Unicode escape sequence");
+                
+                std::string hexStr;
+                for (int i = 0; i < 4; i++) hexStr += advance();
+                
+                try 
+                {
+                    int unicode = std::stoi(hexStr, nullptr, 16);
+                    if (unicode > 0x10FFFF) throw std::runtime_error("Unicode escape sequence \\u" + hexStr + " is out of range (max U+10FFFF)");
+                    
+                    lit += encodeUtf8(unicode);
+                }
+                catch (const std::exception&)
+                {
+                    throw std::runtime_error("Invalid Unicode escape sequence: \\u" + hexStr);
+                }
+            }
+            else if (escapeChar == 'U')
+            {
+                advance();
+                if (pos + 8 > source.length()) throw std::runtime_error("Invalid Unicode escape sequence");
+                
+                std::string hexStr;
+                for (int i = 0; i < 8; i++) hexStr += advance();
+                
+                try 
+                {
+                    int unicode = std::stoi(hexStr, nullptr, 16);
+                    if (unicode > 0x10FFFF) throw std::runtime_error("Unicode escape sequence \\U" + hexStr + " is out of range (max U+10FFFF)");
+                    
+                    lit += encodeUtf8(unicode);
+                }
+                catch (const std::exception&)
+                {
+                    throw std::runtime_error("Invalid Unicode escape sequence: \\U" + hexStr);
+                }
+            }
+            else lit += processEscapeSequence();
+        }
+        else lit += advance();
+    }
 
     if (pos >= source.length()) throw std::runtime_error("Invalid string literal (the closing quotation mark is missing)");
     advance();
@@ -132,13 +186,22 @@ Token Lexer::tokenizeCharLiteral()
     int tmpColumn = column;
 
     advance();
-    while (pos < source.length() && peek() != '\'') lit += advance();
+    while (pos < source.length() && peek() != '\'') 
+    {
+        if (peek() == '\\')
+        {
+            advance();
+            if (pos >= source.length()) throw std::runtime_error("Invalid escape sequence in character literal");
+            lit += processEscapeSequence();
+        }
+        else lit += advance();
+    }
 
     if (pos >= source.length()) throw std::runtime_error("Invalid character literal (the closing quotation mark is missing)");
     advance();
 
-    if (lit.length() > 1) throw std::runtime_error("Invalid character literal (must have length is 1)");
-    else if (lit.length() == 0) throw std::runtime_error("Invalid character literal (empty character constant)");
+    if (lit.length() == 0) throw std::runtime_error("Invalid character literal (empty character constant)");
+    if (lit.length() > 4) throw std::runtime_error("Invalid character literal (UTF-8 character too long)");
 
     return Token(TokenType::CHAR_LIT, lit, tmpLine, tmpColumn);
 }
@@ -288,6 +351,88 @@ Token Lexer::tokenizeOperator()
     }
 }
 
+char Lexer::processEscapeSequence()
+{
+    char c = advance();
+    
+    switch (c)
+    {
+        case 'n': return '\n';
+        case 't': return '\t';
+        case 'r': return '\r';
+        case '\\': return '\\';
+        case '\'': return '\'';
+        case '"': return '"';
+        case '0': return '\0';
+        case 'a': return '\a';
+        case 'b': return '\b';
+        case 'f': return '\f';
+        case 'v': return '\v';
+        case 'x':
+        {
+            if (pos + 2 > source.length()) throw std::runtime_error("Invalid hexadecimal escape sequence");
+            
+            std::string hexStr;
+            hexStr += advance();
+            hexStr += advance();
+            
+            try 
+            {
+                return (char)(std::stoi(hexStr, nullptr, 16));
+            }
+            catch (const std::exception&)
+            {
+                throw std::runtime_error("Invalid hexadecimal escape sequence: \\x" + hexStr);
+            }
+        }
+        case 'u':
+        {
+            if (pos + 4 > source.length()) throw std::runtime_error("Invalid Unicode escape sequence");
+            
+            std::string hexStr;
+            for (int i = 0; i < 4; i++) hexStr += advance();
+            
+            try 
+            {
+                int unicode = std::stoi(hexStr, nullptr, 16);
+                
+                if (unicode > 0x10FFFF) throw std::runtime_error("Unicode escape sequence \\u" + hexStr + " is out of range (max U+10FFFF)");
+                
+                if (unicode <= 127) return (char)(unicode);
+                
+                return (char)(unicode & 0xFF);
+            }
+            catch (const std::exception&)
+            {
+                throw std::runtime_error("Invalid Unicode escape sequence: \\u" + hexStr);
+            }
+        }
+        case 'U':
+        {
+            if (pos + 8 > source.length()) throw std::runtime_error("Invalid Unicode escape sequence");
+            
+            std::string hexStr;
+            for (int i = 0; i < 8; i++) hexStr += advance();
+            
+            try
+            {
+                int unicode = std::stoi(hexStr, nullptr, 16);
+                
+                if (unicode > 0x10FFFF) throw std::runtime_error("Unicode escape sequence \\U" + hexStr + " is out of range (max U+10FFFF)");
+                
+                if (unicode <= 127) return (char)(unicode);
+                
+                return (char)(unicode & 0xFF);
+            }
+            catch (const std::exception&)
+            {
+                throw std::runtime_error("Invalid Unicode escape sequence: \\U" + hexStr);
+            }
+        }
+        default: throw std::runtime_error("Invalid escape sequence: \\" + std::string(1, c));
+    }
+}
+
 void Lexer::scipComments()
 {
     advance();  // scip '/'
@@ -308,6 +453,34 @@ void Lexer::scipMultilineComments()
     advance();  // scip '/'
     advance();  // scip '/'
     advance();  // scip '/'
+}
+
+std::string Lexer::encodeUtf8(int unicode)
+{
+    std::vector<char> utf8;
+    
+    if (unicode <= 0x7F) utf8.push_back((char)(unicode));
+    else if (unicode <= 0x7FF)
+    {
+        utf8.push_back((char)(0xC0 | (unicode >> 6)));
+        utf8.push_back((char)(0x80 | (unicode & 0x3F)));
+    }
+    else if (unicode <= 0xFFFF)
+    {
+        utf8.push_back((char)(0xE0 | (unicode >> 12)));
+        utf8.push_back((char)(0x80 | ((unicode >> 6) & 0x3F)));
+        utf8.push_back((char)(0x80 | (unicode & 0x3F)));
+    }
+    else if (unicode <= 0x10FFFF)
+    {
+        utf8.push_back((char)(0xF0 | (unicode >> 18)));
+        utf8.push_back((char)(0x80 | ((unicode >> 12) & 0x3F)));
+        utf8.push_back((char)(0x80 | ((unicode >> 6) & 0x3F)));
+        utf8.push_back((char)(0x80 | (unicode & 0x3F)));
+    }
+    else throw std::runtime_error("Unicode code point out of range: " + std::to_string(unicode));
+    
+    return std::string(utf8.begin(), utf8.end());
 }
 
 const char Lexer::peek()

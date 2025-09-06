@@ -11,6 +11,7 @@ func int main()
         }
         
         echo i;
+        echo '\n';
         i += 1;
     } -> (i < 10);
     
