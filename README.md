@@ -1,7 +1,7 @@
 # StageLang
 **Stage** - multi-paradigm programming language
 
-Compiler version: **v0.6** – C++ &amp; LLVM
+Compiler version: **v0.7** – C++ &amp; LLVM
 
 ## Installation (Linux)
 
