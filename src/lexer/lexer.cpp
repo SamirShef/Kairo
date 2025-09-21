@@ -34,6 +34,9 @@ Lexer::Lexer(const std::string initSource)
     keywords["echo"] = TokenType::ECHO;
     keywords["trait"] = TokenType::TRAIT;
     keywords["impl"] = TokenType::IMPL;
+    keywords["const"] = TokenType::CONST;
+    keywords["include"] = TokenType::INCLUDE;
+    keywords["sizeof"] = TokenType::SIZEOF;
 }
 
 std::vector<Token> Lexer::tokenize()
@@ -221,6 +224,11 @@ Token Lexer::tokenizeOperator()
                 advance(); advance();
                 return Token(TokenType::PLUS_ASSIGN, "+=", tmpLine, tmpColumn);
             }
+            else if (peek(1) == '+')
+            {
+                advance(); advance();
+                return Token(TokenType::INCREMENT, "++", tmpLine, tmpColumn);
+            }
 
             advance();
             return Token(TokenType::PLUS, "+", tmpLine, tmpColumn);
@@ -234,6 +242,11 @@ Token Lexer::tokenizeOperator()
             {
                 advance(); advance();
                 return Token(TokenType::NEXT, "->", tmpLine, tmpColumn);
+            }
+            else if (peek(1) == '-')
+            {
+                advance(); advance();
+                return Token(TokenType::DECREMENT, "--", tmpLine, tmpColumn);
             }
 
             advance();

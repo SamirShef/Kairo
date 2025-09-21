@@ -1,11 +1,13 @@
 #include "../../include/semantic/semanticanalyzer.hpp"
 #include <llvm/IR/Type.h>
+#include <stdexcept>
+#include <utility>
 
 std::string typeToString(Type);
 
 void SemanticAnalyzer::analyze(const std::vector<AST::StmtPtr>& stmts)
 {
-    variables.emplace(std::map<std::string, Type>{});
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
     for (const AST::StmtPtr& stmt : stmts) analyzeStmt(*stmt);
 }
 
@@ -34,7 +36,8 @@ void SemanticAnalyzer::analyzeStmt(AST::Stmt& stmt)
 void SemanticAnalyzer::analyzeVarDeclStmt(AST::VarDeclStmt& vds)
 {
     if (vds.expr)
-        if (variables.size() == 1 && !isConstExpr(*vds.expr)) throw std::runtime_error("Global variable initializer must be a constant expression");
+        if (variables.size() == 1 && !isConstExpr(*vds.expr))
+            throw std::runtime_error("Global variable initializer must be a constant expression");
 
     if (vds.type.type == TypeValue::CLASS)
     {
@@ -53,13 +56,13 @@ void SemanticAnalyzer::analyzeVarDeclStmt(AST::VarDeclStmt& vds)
         variablesTypes.pop();
     }
 
-    variables.top().insert({vds.name, vds.type});
+    variables.top().insert({vds.name, {vds.type, vds.isConst}});
 }
 
 void SemanticAnalyzer::analyzeArrayAsgnStmt(AST::ArrayAsgnStmt& aas)
 {
     auto copy = variables;
-    Type arrayType;
+    std::pair<Type, bool> arrayType;
     bool found = false;
     
     while (!copy.empty())
@@ -88,7 +91,7 @@ void SemanticAnalyzer::analyzeArrayAsgnStmt(AST::ArrayAsgnStmt& aas)
                 {
                     if (field->name == aas.name)
                     {
-                        arrayType = field->type;
+                        arrayType.first = field->type;
                         found = true;
                         break;
                     }
@@ -99,14 +102,16 @@ void SemanticAnalyzer::analyzeArrayAsgnStmt(AST::ArrayAsgnStmt& aas)
     
     if (!found) throw std::runtime_error("Array variable '" + aas.name + "' does not exist");
 
-    if (arrayType.type != TypeValue::ARRAY) throw std::runtime_error("Variable '" + aas.name + "' is not an array");
+    if (arrayType.first.type != TypeValue::ARRAY) throw std::runtime_error("Variable '" + aas.name + "' is not an array");
+
+    if (arrayType.second) throw std::runtime_error("Cannot change the value of a constant");
 
     Type indexType = analyzeExpr(*aas.index);
     if (indexType.type != TypeValue::INT) throw std::runtime_error("Array index must be of type int");
 
     Type valueType = analyzeExpr(*aas.expr);
-    if (!canImplicitlyCast(valueType, *arrayType.elementType)) 
-        throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(valueType) + " to " + typeToString(*arrayType.elementType));
+    if (!canImplicitlyCast(valueType, *arrayType.first.elementType)) 
+        throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(valueType) + " to " + typeToString(*arrayType.first.elementType));
 }
 
 void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
@@ -118,8 +123,10 @@ void SemanticAnalyzer::analyzeVarAsgnStmt(AST::VarAsgnStmt& vas)
         auto it = scope.find(vas.name);
         if (it != scope.end())
         {
+            if (it->second.second) throw std::runtime_error("Cannot change the value of a constant");
+
             Type exprType = analyzeExpr(*vas.expr);
-            if (!canImplicitlyCast(exprType, it->second)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(it->second));
+            if (!canImplicitlyCast(exprType, it->second.first)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(it->second.first));
 
             return;
         }
@@ -162,6 +169,8 @@ void SemanticAnalyzer::analyzeFieldAsgnStmt(AST::FieldAsgnStmt& stmt)
     {
         if (field->name == stmt.name)
         {
+            if (field->isConst) throw std::runtime_error("Cannot change the value of a constant");
+
             Type exprType = analyzeExpr(*stmt.expr);
             if (!canImplicitlyCast(exprType, field->type)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(exprType) + " to " + typeToString(field->type));
             
@@ -217,9 +226,9 @@ void SemanticAnalyzer::analyzeFuncDeclStmt(AST::FuncDeclStmt& fds)
     }
 
     functionReturnTypes.push(fds.retType);
-    variables.emplace(std::map<std::string, Type>{});
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
     
-    for (const auto& arg : fds.args) variables.top()[arg.name] = arg.type;
+    for (const auto& arg : fds.args) variables.top()[arg.name] = {arg.type, arg.isConst};
     for (const auto& stmt : fds.block) analyzeStmt(*stmt);
 
     variables.pop();
@@ -326,13 +335,13 @@ void SemanticAnalyzer::analyzeIfElseStmt(AST::IfElseStmt& ies)
 
     if (condType.type != TypeValue::BOOL) throw std::runtime_error("Conditional expression must be return bool value");
 
-    variables.emplace(std::map<std::string, Type>{});
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
     for (const auto& stmt : ies.thenBranch) analyzeStmt(*stmt);
     variables.pop();
 
     if (ies.elseBranch.size() != 0)
     {
-        variables.emplace(std::map<std::string, Type>{});
+        variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
         for (const auto& stmt : ies.elseBranch) analyzeStmt(*stmt);
         variables.pop();
     }
@@ -346,7 +355,7 @@ void SemanticAnalyzer::analyzeWhileLoopStmt(AST::WhileLoopStmt& wls)
 
     if (condType.type != TypeValue::BOOL) throw std::runtime_error("Conditional expression must be return bool value");
 
-    variables.emplace(std::map<std::string, Type>{});
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
     loopDepth++;
     for (const auto& stmt : wls.block) analyzeStmt(*stmt);
     loopDepth--;
@@ -361,7 +370,7 @@ void SemanticAnalyzer::analyzeDoWhileLoopStmt(AST::DoWhileLoopStmt& dwls)
 
     if (condType.type != TypeValue::BOOL) throw std::runtime_error("Conditional expression must be return bool value");
 
-    variables.emplace(std::map<std::string, Type>{});
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
     loopDepth++;
     for (const auto& stmt : dwls.block) analyzeStmt(*stmt);
     loopDepth--;
@@ -372,7 +381,7 @@ void SemanticAnalyzer::analyzeForLoopStmt(AST::ForLoopStmt& fls)
 {
     if (functionReturnTypes.size() == 0) throw std::runtime_error("While statement cannot be outside function");
     
-    variables.emplace(std::map<std::string, Type>{});
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
 
     analyzeStmt(*fls.iterator);
 
@@ -419,7 +428,7 @@ void SemanticAnalyzer::analyzeClassDeclStmt(AST::ClassDeclStmt& cds)
     for (auto& member : cds.members)
     {
         if (auto field = dynamic_cast<AST::FieldMember*>(member.get()))
-            membersCopy.push_back(std::make_unique<AST::FieldMember>(field->access, field->name, field->type, field->expr ? std::unique_ptr<AST::Expr>(field->expr->clone()) : nullptr));
+            membersCopy.push_back(std::make_unique<AST::FieldMember>(field->access, field->name, field->type, field->expr ? std::unique_ptr<AST::Expr>(field->expr->clone()) : nullptr, field->isConst));
 
         else if (auto method = dynamic_cast<AST::MethodMember*>(member.get()))
         {
@@ -501,10 +510,10 @@ void SemanticAnalyzer::analyzeMethodMember(std::string className, std::vector<st
     }
 
     functionReturnTypes.push(mm.retType);
-    variables.emplace(std::map<std::string, Type>{});
-    variables.top()["this"] = Type(TypeValue::CLASS, className);
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
+    variables.top()["this"] = {Type(TypeValue::CLASS, className), false};
 
-    for (const auto& arg : mm.args) variables.top()[arg.name] = arg.type;
+    for (const auto& arg : mm.args) variables.top()[arg.name] = {arg.type, arg.isConst};
     for (const auto& stmt : mm.block) analyzeStmt(*stmt);
 
     variables.pop();
@@ -529,10 +538,10 @@ void SemanticAnalyzer::analyzeConstructorMember(std::string className, std::vect
     }
 
     functionReturnTypes.push(Type(TypeValue::VOID, "void"));
-    variables.emplace(std::map<std::string, Type>{});
-    variables.top()["this"] = Type(TypeValue::CLASS, className);
+    variables.emplace(std::map<std::string, std::pair<Type, bool>>{});
+    variables.top()["this"] = {Type(TypeValue::CLASS, className), false};
 
-    for (const auto& arg : cm.args) variables.top()[arg.name] = arg.type;
+    for (const auto& arg : cm.args) variables.top()[arg.name] = {arg.type, arg.isConst};
     for (const auto& stmt : cm.block) analyzeStmt(*stmt);
 
     variables.pop();
@@ -559,19 +568,19 @@ void SemanticAnalyzer::analyzeTraitImplStmt(AST::TraitImplStmt& tis)
     bool isBuiltinType = false;
     for (auto& typeValue : {TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::CHAR, TypeValue::BOOL, TypeValue::STRING})
     {
-        if (tis.className == typeToString(Type(typeValue, "")))
+        if (tis.targetType.type == typeValue)
         {
             isBuiltinType = true;
             break;
         }
     }
     
-    if (!isBuiltinType && classes.find(tis.className) == classes.end()) throw std::runtime_error("Type '" + tis.className + "' not found");
+    if (!isBuiltinType && classes.find(tis.targetType.name) == classes.end()) throw std::runtime_error("Type '" + tis.targetType.name + "' not found");
     
     TraitInfo& traitInfo = traits[tis.traitName];
     TraitImplInfo implInfo;
     implInfo.traitName = tis.traitName;
-    implInfo.className = tis.className;
+    implInfo.className = tis.targetType.name;
     
     for (const auto& traitMethod : traitInfo.methods)
     {
@@ -601,14 +610,14 @@ void SemanticAnalyzer::analyzeTraitImplStmt(AST::TraitImplStmt& tis)
             }
         }
         
-        if (!found) throw std::runtime_error("Trait method '" + traitMethod->name + "' not implemented for class '" + tis.className + "'");
+        if (!found) throw std::runtime_error("Trait method '" + traitMethod->name + "' not implemented for class '" + tis.targetType.name + "'");
     }
     
-    traitImplementations[tis.className].push_back(std::move(implInfo));
+    traitImplementations[tis.targetType.name].push_back(std::move(implInfo));
     
     if (!isBuiltinType)
     {
-        auto classIt = classes.find(tis.className);
+        auto classIt = classes.find(tis.targetType.name);
         if (classIt != classes.end())
         {
             for (const auto& impl : tis.implementations)
@@ -660,6 +669,7 @@ Type SemanticAnalyzer::analyzeExpr(const AST::Expr& expr)
     else if (auto field = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return analyzeFieldAccessExpr(*field);
     else if (auto method = dynamic_cast<const AST::MethodCallExpr*>(&expr)) return analyzeMethodCallExpr(*method);
     else if (auto thisExpr = dynamic_cast<const AST::ThisExpr*>(&expr)) return analyzeThisExpr(*thisExpr);
+    else if (auto sizeofExpr = dynamic_cast<const AST::SizeofExpr*>(&expr)) return analyzeSizeofExpr(*sizeofExpr);
     
     throw std::runtime_error("Unknown expression type in semantic analysis");
 }
@@ -674,14 +684,14 @@ Type SemanticAnalyzer::analyzeBinaryExpr(const AST::BinaryExpr& expr)
         case TokenType::PLUS:
             if (leftType.type == TypeValue::STRING && rightType.type == TypeValue::STRING)
                 return Type(TypeValue::STRING, "string");
-            if (!canImplicitlyCast(leftType, rightType) && !canImplicitlyCast(rightType, leftType)) throw std::runtime_error("Type error: " + typeToString(leftType) + " and " + typeToString(rightType));
+            if (!canImplicitlyCast(leftType, rightType) && !canImplicitlyCast(rightType, leftType)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(leftType) + " and " + typeToString(rightType));
 
             return leftType;
         case TokenType::MINUS:
         case TokenType::MULTIPLY:
         case TokenType::DIVIDE:
         case TokenType::MODULO:
-            if (!canImplicitlyCast(leftType, rightType) && !canImplicitlyCast(rightType, leftType)) throw std::runtime_error("Type error: " + typeToString(leftType) + " and " + typeToString(rightType));
+            if (!canImplicitlyCast(leftType, rightType) && !canImplicitlyCast(rightType, leftType)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(leftType) + " and " + typeToString(rightType));
 
             return leftType;
         
@@ -691,7 +701,7 @@ Type SemanticAnalyzer::analyzeBinaryExpr(const AST::BinaryExpr& expr)
         case TokenType::GREATER_EQUALS:
         case TokenType::LESS:
         case TokenType::LESS_EQUALS:
-            if (!canImplicitlyCast(leftType, rightType) && !canImplicitlyCast(rightType, leftType)) throw std::runtime_error("Type error: " + typeToString(leftType) + " and " + typeToString(rightType));
+            if (!canImplicitlyCast(leftType, rightType) && !canImplicitlyCast(rightType, leftType)) throw std::runtime_error("Type error: Cannot implicitly cast " + typeToString(leftType) + " and " + typeToString(rightType));
             
             return Type(TypeValue::BOOL, "bool");
 
@@ -719,6 +729,15 @@ Type SemanticAnalyzer::analyzeUnaryExpr(const AST::UnaryExpr& expr)
             if (operandType.type != TypeValue::BOOL) throw std::runtime_error("Logical NOT requires boolean operand");
 
             return Type(TypeValue::BOOL, "bool");
+        
+        case TokenType::INCREMENT:
+        case TokenType::DECREMENT:
+        {
+            if (operandType.type != TypeValue::INT && operandType.type != TypeValue::FLOAT && operandType.type != TypeValue::DOUBLE && operandType.type != TypeValue::CHAR)
+                throw std::runtime_error("++/-- requires numeric or char operand");
+            
+            return operandType;
+        }
             
         default: throw std::runtime_error("Unsupported unary operator in semantic analysis");
     }
@@ -748,7 +767,7 @@ Type SemanticAnalyzer::analyzeArrayLiteral(const AST::ArrayLiteral& literal)
 Type SemanticAnalyzer::analyzeArrayExpr(const AST::ArrayExpr& expr)
 {
     auto copy = variables;
-    Type arrayType;
+    std::pair<Type, bool> arrayType;
     bool found = false;
     
     while (!copy.empty())
@@ -777,7 +796,7 @@ Type SemanticAnalyzer::analyzeArrayExpr(const AST::ArrayExpr& expr)
                 {
                     if (field->name == expr.name)
                     {
-                        arrayType = field->type;
+                        arrayType.first = field->type;
                         found = true;
                         break;
                     }
@@ -788,12 +807,14 @@ Type SemanticAnalyzer::analyzeArrayExpr(const AST::ArrayExpr& expr)
     
     if (!found) throw std::runtime_error("Array variable '" + expr.name + "' does not exist");
 
-    if (arrayType.type != TypeValue::ARRAY) throw std::runtime_error("Variable '" + expr.name + "' is not an array");
-
     Type indexType = analyzeExpr(*expr.index);
     if (indexType.type != TypeValue::INT) throw std::runtime_error("Array index must be of type int");
 
-    return *arrayType.elementType;
+    if (arrayType.first.type == TypeValue::STRING) return Type(TypeValue::CHAR, "char");
+
+    if (arrayType.first.type != TypeValue::ARRAY) throw std::runtime_error("Variable '" + expr.name + "' is not an array");
+
+    return *arrayType.first.elementType;
 }
 
 Type SemanticAnalyzer::analizeVarExpr(const AST::VarExpr& expr)
@@ -803,7 +824,7 @@ Type SemanticAnalyzer::analizeVarExpr(const AST::VarExpr& expr)
     {
         const auto& scope = copy.top();
         auto it = scope.find(expr.name);
-        if (it != scope.end()) return it->second;
+        if (it != scope.end()) return it->second.first;
 
         copy.pop();
     }
@@ -1043,6 +1064,35 @@ Type SemanticAnalyzer::analyzeThisExpr(const AST::ThisExpr& expr)
     return Type(TypeValue::CLASS, typeName);
 }
 
+Type SemanticAnalyzer::analyzeSizeofExpr(const AST::SizeofExpr& expr)
+{
+    Type targetType;
+    
+    if (expr.expr)
+    {
+        if (auto varExpr = dynamic_cast<const AST::VarExpr*>(expr.expr.get()))
+        {
+            if (classes.find(varExpr->name) != classes.end()) 
+            {
+                targetType = Type(TypeValue::CLASS, varExpr->name);
+                const_cast<AST::SizeofExpr&>(expr).isTypeExpression = true;
+                const_cast<AST::SizeofExpr&>(expr).type = targetType;
+            }
+            else if (traits.find(varExpr->name) != traits.end()) 
+            {
+                targetType = Type(TypeValue::TRAIT, varExpr->name);
+                const_cast<AST::SizeofExpr&>(expr).isTypeExpression = true;
+                const_cast<AST::SizeofExpr&>(expr).type = targetType;
+            }
+            else targetType = analyzeExpr(*expr.expr);
+        }
+        else targetType = analyzeExpr(*expr.expr);
+    }
+    else targetType = expr.type;
+    
+    return Type(TypeValue::INT, "int");
+}
+
 bool SemanticAnalyzer::canImplicitlyCast(Type l, Type r)
 {
     if (l == r) return true;
@@ -1075,9 +1125,18 @@ bool SemanticAnalyzer::canImplicitlyCast(Type l, Type r)
 
 bool SemanticAnalyzer::isConstExpr(const AST::Expr& expr) const
 {
+    if (auto arr = dynamic_cast<const AST::ArrayLiteral*>(&expr))
+    {
+        for (const auto& element : arr->elements)
+            if (!isConstExpr(*element)) return false;
+        
+        return true;
+    }
+    
     if (dynamic_cast<const AST::Literal*>(&expr)) return true;
     if (auto bin = dynamic_cast<const AST::BinaryExpr*>(&expr)) return isConstExpr(*bin->left) && isConstExpr(*bin->right);
     if (auto un = dynamic_cast<const AST::UnaryExpr*>(&expr)) return isConstExpr(*un->expr);
+    if (dynamic_cast<const AST::FuncCallExpr*>(&expr)) return false;
     
     return false;
 }

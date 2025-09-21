@@ -22,6 +22,29 @@ CodeGenerator::CodeGenerator(const std::string& moduleName) : context(), builder
     auto sizeTy = llvm::Type::getInt64Ty(context);
     auto mallocTy = llvm::FunctionType::get(ptrTy, {sizeTy}, false);
     module->getOrInsertFunction("malloc", mallocTy);
+    
+    auto charToStrTy = llvm::FunctionType::get(ptrTy, {llvm::Type::getInt8Ty(context)}, false);
+    charToStringFunc = llvm::Function::Create(charToStrTy, llvm::Function::ExternalLinkage, "char_to_string", *module);
+    
+    currentFunctionReturnType = Type(TypeValue::VOID, "void");
+    
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", charToStringFunc);
+    llvm::IRBuilder<> funcBuilder(entry);
+    
+    llvm::Argument* charArg = &charToStringFunc->arg_begin()[0];
+    charArg->setName("ch");
+    
+    llvm::Value* mallocCall = funcBuilder.CreateCall(module->getFunction("malloc"), llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 2), "str_malloc");
+    
+    llvm::Value* strPtr = funcBuilder.CreateBitCast(mallocCall, ptrTy, "str_ptr");
+    
+    llvm::Value* charPtr = funcBuilder.CreateInBoundsGEP(llvm::Type::getInt8Ty(context), strPtr, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0), "char_ptr");
+    funcBuilder.CreateStore(charArg, charPtr);
+    
+    llvm::Value* nullPtr = funcBuilder.CreateInBoundsGEP(llvm::Type::getInt8Ty(context), strPtr, llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1), "null_ptr");
+    funcBuilder.CreateStore(llvm::ConstantInt::get(llvm::Type::getInt8Ty(context), 0), nullPtr);
+    
+    funcBuilder.CreateRet(strPtr);
 }
 
 void CodeGenerator::pushScope()
@@ -63,6 +86,39 @@ llvm::Value* CodeGenerator::getNamedValue(const std::string& name) const
     return nullptr;
 }
 
+Type CodeGenerator::getNamedType(const std::string& name) const
+{
+    auto copy = typesScopeStack;
+    while (!copy.empty())
+    {
+        const auto& scope = copy.top();
+        auto it = scope.find(name);
+        if (it != scope.end()) return it->second;
+
+        copy.pop();
+    }
+
+    throw std::runtime_error("Variable type '" + name + "' not found");
+}
+
+Type CodeGenerator::getVariableType(const std::string& name) const
+{
+    auto copy = typesScopeStack;
+    while (!copy.empty())
+    {
+        const auto& scope = copy.top();
+        auto it = scope.find(name);
+        if (it != scope.end()) return it->second;
+
+        copy.pop();
+    }
+
+    auto globalIt = globalVariableTypes.find(name);
+    if (globalIt != globalVariableTypes.end()) return globalIt->second;
+
+    throw std::runtime_error("Variable type '" + name + "' not found");
+}
+
 std::string CodeGenerator::resolveClassName(const AST::Expr& expr)
 {
     if (auto var = dynamic_cast<const AST::VarExpr*>(&expr))
@@ -80,6 +136,13 @@ std::string CodeGenerator::resolveClassName(const AST::Expr& expr)
             }
 
             copy.pop();
+        }
+        
+        auto globalIt = globalVariableTypes.find(var->name);
+        if (globalIt != globalVariableTypes.end())
+        {
+            if (globalIt->second.type == TypeValue::CLASS) return globalIt->second.name;
+            return globalIt->second.name;
         }
     }
     else if (dynamic_cast<const AST::ThisExpr*>(&expr))
@@ -111,15 +174,68 @@ std::string CodeGenerator::resolveClassName(const AST::Expr& expr)
             copy.pop();
         }
         
+        auto globalIt = globalVariableTypes.find(array->name);
+        if (globalIt != globalVariableTypes.end())
+        {
+            if (globalIt->second.type == TypeValue::ARRAY && globalIt->second.elementType)
+            {
+                if (globalIt->second.elementType->type == TypeValue::CLASS) return globalIt->second.elementType->name;
+                return globalIt->second.elementType->name;
+            }
+            
+            throw std::runtime_error("Global variable '" + array->name + "' is not an array");
+        }
+        
         throw std::runtime_error("Array variable '" + array->name + "' not found");
     }
     else if (auto literal = dynamic_cast<const AST::Literal*>(&expr)) return literal->type.name;
+    else if (auto funcCall = dynamic_cast<const AST::FuncCallExpr*>(&expr))
+    {
+        auto it = functions.find(funcCall->name);
+        if (it != functions.end())
+            for (const auto& fn : it->second)
+                if (fn.args.size() == funcCall->args.size())
+                    return fn.returnType.name;
+        
+        if (!classesStack.empty())
+        {
+            std::string className = classesStack.top();
+            auto classIt = classes.find(className);
+            if (classIt != classes.end())
+            {
+                auto methIt = classIt->second.methods.find(funcCall->name);
+                if (methIt != classIt->second.methods.end()) return className;
+            }
+        }
+        
+        throw std::runtime_error("Function not found: " + funcCall->name);
+    }
+    else if (auto binary = dynamic_cast<const AST::BinaryExpr*>(&expr))
+    {
+        std::string leftType = resolveClassName(*binary->left);
+        std::string rightType = resolveClassName(*binary->right);
+        
+        if (leftType == "double" || rightType == "double") return "double";
+        if (leftType == "float" || rightType == "float") return "float";
+        if (leftType == "int" || rightType == "int") return "int";
+        if (leftType == "char" || rightType == "char") return "char";
+        if (leftType == "bool" || rightType == "bool") return "bool";
+        if (leftType == "string" || rightType == "string") return "string";
+        
+        if (leftType == rightType) return leftType;
+        
+        return "int";
+    }
+    else if (auto unary = dynamic_cast<const AST::UnaryExpr*>(&expr)) return resolveClassName(*unary->expr);
 
     throw std::runtime_error("Unable to resolve class name for expression");
 }
 
 llvm::Type* CodeGenerator::getLLVMType(Type type)
 {
+    if (type.name.empty() && type.type != TypeValue::INT && type.type != TypeValue::FLOAT && type.type != TypeValue::DOUBLE && type.type != TypeValue::CHAR && type.type != TypeValue::BOOL && type.type != TypeValue::STRING && type.type != TypeValue::VOID)
+        throw std::runtime_error("Type with empty name detected in getLLVMType");
+    
     switch(type.type)
     {
         case TypeValue::INT: return llvm::Type::getInt32Ty(context);
@@ -134,8 +250,9 @@ llvm::Type* CodeGenerator::getLLVMType(Type type)
             if (!type.elementType) throw std::runtime_error("Array type without element type");
 
             llvm::Type* elementLLVMType = getLLVMType(*type.elementType);
+            llvm::ArrayType* arrayType = llvm::ArrayType::get(elementLLVMType, type.arraySize);
 
-            return llvm::PointerType::get(elementLLVMType, 0);
+            return llvm::PointerType::get(arrayType, 0);
         }
         case TypeValue::CLASS:
         {
@@ -162,13 +279,41 @@ llvm::Value* CodeGenerator::castToExpectedIfNeeded(llvm::Value* value, llvm::Typ
         unsigned dstBits = expectedType->getIntegerBitWidth();
 
         if (srcBits < dstBits) return builder.CreateSExt(value, expectedType, "sexttmp");
+        if (srcBits > dstBits) return builder.CreateTrunc(value, expectedType, "trunctmp");
+        
+        return value;
     }
 
     if (srcType->isFloatTy() && expectedType->isDoubleTy()) return builder.CreateFPExt(value, expectedType, "fpexttmp");
+    if (srcType->isDoubleTy() && expectedType->isFloatTy()) return builder.CreateFPTrunc(value, expectedType, "fptrunctmp");
     
     if (srcType->isIntegerTy() && (expectedType->isFloatTy() || expectedType->isDoubleTy())) return builder.CreateSIToFP(value, expectedType, "sitofptmp");
     
     if ((srcType->isFloatTy() || srcType->isDoubleTy()) && expectedType->isIntegerTy()) return builder.CreateFPToSI(value, expectedType, "fptositmp");
+    
+    if (srcType->isIntegerTy(8) && expectedType->isPointerTy())
+    {
+        llvm::Constant* charConst = llvm::dyn_cast<llvm::Constant>(value);
+        if (charConst)
+        {
+            llvm::ConstantInt* charInt = llvm::cast<llvm::ConstantInt>(charConst);
+            char charValue = static_cast<char>(charInt->getZExtValue());
+            
+            std::string charStr(1, charValue);
+            
+            llvm::GlobalVariable* strGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, charStr)->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, charStr), "char_str_" + std::to_string(static_cast<int>(charValue)));
+            
+            llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            return builder.CreateInBoundsGEP(strGV->getValueType(), strGV, {zero, zero}, "char_str_ptr");
+        }
+        else return builder.CreateCall(charToStringFunc, {value}, "char_to_str");
+    }
+    
+    if (srcType->isIntegerTy(32) && expectedType->isPointerTy())
+    {
+        llvm::Value* charValue = builder.CreateTrunc(value, llvm::Type::getInt8Ty(context), "int_to_char");
+        return builder.CreateCall(charToStringFunc, {charValue}, "char_to_str");
+    }
     
     return value;
 }
@@ -210,23 +355,69 @@ void CodeGenerator::generateVarDeclStmt(const AST::VarDeclStmt& stmt)
     else
     {
         llvm::Type* ty = getLLVMType(stmt.type);
-        if (stmt.type.type == TypeValue::STRING) initValue = builder.CreateGlobalString("", "empty_str");
+        if (stmt.type.type == TypeValue::STRING) 
+        {
+            llvm::GlobalVariable* emptyStrGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, "")->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, ""), "empty_str");
+            llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            initValue = builder.CreateInBoundsGEP(emptyStrGV->getValueType(), emptyStrGV, {zero, zero}, "empty_str_ptr");
+        }
         else initValue = llvm::Constant::getNullValue(ty);
     }
     
     if (builder.GetInsertBlock() == nullptr)
     {
-        llvm::Constant* constantInit = llvm::dyn_cast<llvm::Constant>(initValue);
-        if (!constantInit) if (auto* ce = llvm::dyn_cast<llvm::ConstantExpr>(initValue)) constantInit = ce;
-        if (!constantInit) throw std::runtime_error("Global variable initializer must be a constant");
+        llvm::Type* destTy = getLLVMType(stmt.type);
+        
+        if (stmt.type.type == TypeValue::ARRAY)
+        {
+            llvm::Constant* constantInit = llvm::dyn_cast<llvm::Constant>(initValue);
+            if (!constantInit) if (auto* ce = llvm::dyn_cast<llvm::ConstantExpr>(initValue)) constantInit = ce;
+            if (!constantInit) throw std::runtime_error("Global array initializer must be a constant");
 
-        llvm::GlobalVariable* gv = new llvm::GlobalVariable(*module, getLLVMType(stmt.type), false, llvm::GlobalValue::ExternalLinkage, constantInit, stmt.name);
-        setNamedValue(stmt.name, gv);
+            llvm::GlobalVariable* arrayGV = new llvm::GlobalVariable(*module, constantInit->getType(), stmt.isConst, llvm::GlobalValue::InternalLinkage, constantInit, stmt.name + "_array");
+            
+            llvm::Constant* arrayPtr = llvm::ConstantExpr::getBitCast(arrayGV, destTy);
+            
+            llvm::GlobalVariable* gv = new llvm::GlobalVariable(*module, destTy, stmt.isConst, llvm::GlobalValue::ExternalLinkage, arrayPtr, stmt.name);
+            setNamedValue(stmt.name, gv);
+            globalVariableTypes[stmt.name] = stmt.type;
+            
+            if (auto* arrayType = llvm::dyn_cast<llvm::ArrayType>(constantInit->getType())) arrayTypes[stmt.name] = arrayType;
+        }
+        else
+        {
+            llvm::Constant* constantInit = llvm::dyn_cast<llvm::Constant>(initValue);
+            if (!constantInit) if (auto* ce = llvm::dyn_cast<llvm::ConstantExpr>(initValue)) constantInit = ce;
+            if (!constantInit) throw std::runtime_error("Global variable initializer must be a constant");
+
+            if (constantInit->getType() != destTy)
+            {
+                if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(constantInit))
+                {
+                    long long ival = ci->getSExtValue();
+                    if (destTy->isIntegerTy()) constantInit = llvm::ConstantInt::get(destTy, static_cast<uint64_t>(ival), true);
+                    else if (destTy->isFloatTy() || destTy->isDoubleTy()) constantInit = llvm::ConstantFP::get(destTy, static_cast<double>(ival));
+                }
+                else if (auto* cfp = llvm::dyn_cast<llvm::ConstantFP>(constantInit))
+                {
+                    double dval = cfp->getValueAPF().convertToDouble();
+                    if (destTy->isFloatTy() || destTy->isDoubleTy()) constantInit = llvm::ConstantFP::get(destTy, dval);
+                    else if (destTy->isIntegerTy()) constantInit = llvm::ConstantInt::get(destTy, static_cast<long long>(dval), true);
+                }
+            }
+
+            llvm::GlobalVariable* gv = new llvm::GlobalVariable(*module, destTy, stmt.isConst, llvm::GlobalValue::ExternalLinkage, constantInit, stmt.name);
+            setNamedValue(stmt.name, gv);
+            globalVariableTypes[stmt.name] = stmt.type;
+        }
 
         return;
     }
 
-    llvm::AllocaInst* alloca = builder.CreateAlloca(getLLVMType(stmt.type), nullptr, stmt.name + ".addr");
+    llvm::Type* destTy = getLLVMType(stmt.type);
+    llvm::AllocaInst* alloca = builder.CreateAlloca(destTy, nullptr, stmt.name + ".addr");
+    initValue = castToExpectedIfNeeded(initValue, destTy);
+    
     builder.CreateStore(initValue, alloca);
     setNamedValue(stmt.name, alloca);
     typesScopeStack.top()[stmt.name] = stmt.type;
@@ -322,6 +513,8 @@ void CodeGenerator::generateFuncDeclStmt(const AST::FuncDeclStmt& stmt)
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(context, "entry", func);
     builder.SetInsertPoint(entry);
     
+    currentFunctionReturnType = stmt.retType;
+    
     pushScope();
 
     size_t index = 0;
@@ -402,6 +595,11 @@ void CodeGenerator::generateFuncCallStmt(const AST::FuncCallStmt& stmt)
     }
 
     const auto& overloads = it->second;
+    
+    int bestScore = -1;
+    const FunctionInfo* bestOverload = nullptr;
+    std::vector<llvm::Value*> bestCasted;
+    
     for (const auto& fn : overloads)
     {
         if (fn.args.size() != argValues.size()) continue;
@@ -409,13 +607,27 @@ void CodeGenerator::generateFuncCallStmt(const AST::FuncCallStmt& stmt)
         std::vector<llvm::Value*> casted;
         casted.reserve(argValues.size());
         bool ok = true;
+        int score = 0;
+        
         for (size_t i = 0; i < argValues.size(); i++)
         {
             llvm::Type* expected = getLLVMType(fn.args[i].type);
             llvm::Value* value = argValues[i];
 
-            if (value->getType() == expected) { casted.push_back(value); continue; }
+            if (value->getType() == expected) 
+            { 
+                casted.push_back(value); 
+                continue;
+            }
             if (expected->isPointerTy() && value->getType()->isPointerTy()) { ok = false; break; }
+
+            if (value->getType()->isIntegerTy() && expected->isIntegerTy()) score++;
+            else if (value->getType()->isFloatTy() && expected->isFloatTy()) score++;
+            else if (value->getType()->isDoubleTy() && expected->isDoubleTy()) score++;
+            else if (value->getType()->isIntegerTy() && (expected->isFloatTy() || expected->isDoubleTy())) score += 2;
+            else if (value->getType()->isFloatTy() && expected->isDoubleTy()) score++;
+            else if (value->getType()->isDoubleTy() && expected->isFloatTy()) score += 2;
+            else { ok = false; break; }
 
             value = castToExpectedIfNeeded(value, expected);
 
@@ -425,13 +637,21 @@ void CodeGenerator::generateFuncCallStmt(const AST::FuncCallStmt& stmt)
         }
 
         if (!ok) continue;
-
-        llvm::Function* callee = module->getFunction(fn.mangledName);
-
-        if (!callee) throw std::runtime_error("Function not declared: " + fn.mangledName);
-
-        builder.CreateCall(callee, casted);
         
+        if (bestScore == -1 || score < bestScore)
+        {
+            bestScore = score;
+            bestOverload = &fn;
+            bestCasted = std::move(casted);
+        }
+    }
+    
+    if (bestOverload)
+    {
+        llvm::Function* callee = module->getFunction(bestOverload->mangledName);
+        if (!callee) throw std::runtime_error("Function not declared: " + bestOverload->mangledName);
+        builder.CreateCall(callee, bestCasted);
+
         return;
     }
 
@@ -450,7 +670,18 @@ void CodeGenerator::generateMethodCallStmt(const AST::MethodCallStmt& stmt)
 void CodeGenerator::generateReturnStmt(const AST::ReturnStmt& stmt)
 {
     if (!stmt.expr) builder.CreateRetVoid();
-    else builder.CreateRet(generateExpr(*stmt.expr));
+    else 
+    {
+        llvm::Value* returnValue = generateExpr(*stmt.expr);
+        
+        if (currentFunctionReturnType.type != TypeValue::VOID)
+        {
+            llvm::Type* expectedType = getLLVMType(currentFunctionReturnType);
+            returnValue = castToExpectedIfNeeded(returnValue, expectedType);
+        }
+        
+        builder.CreateRet(returnValue);
+    }
 }
 
 void CodeGenerator::generateIfElseStmt(const AST::IfElseStmt& stmt)
@@ -634,10 +865,10 @@ void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
     if (value->getType()->isIntegerTy(32)) formatStr = "%d";
     else if (value->getType()->isFloatTy())
     {
-        formatStr = "%f";
+        formatStr = "%.6f";
         promoted = builder.CreateFPExt(value, llvm::Type::getDoubleTy(context));
     }
-    else if (value->getType()->isDoubleTy()) formatStr = "%lf";
+    else if (value->getType()->isDoubleTy()) formatStr = "%.15lf";
     else if (value->getType()->isIntegerTy(8))
     {
         formatStr = "%c";
@@ -647,8 +878,8 @@ void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
     {
         formatStr = "%s";
 
-        llvm::GlobalVariable* trueGV = builder.CreateGlobalString("true", "true_str");
-        llvm::GlobalVariable* falseGV = builder.CreateGlobalString("false", "false_str");
+        llvm::GlobalVariable* trueGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, "true")->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, "true"), "true_str");
+        llvm::GlobalVariable* falseGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, "false")->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, "false"), "false_str");
 
         llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
         llvm::Value* truePtr = builder.CreateInBoundsGEP(trueGV->getValueType(), trueGV, {zero, zero}, "true_ptr");
@@ -659,12 +890,14 @@ void CodeGenerator::generateEchoStmt(const AST::EchoStmt& stmt)
     else if (value->getType()->isPointerTy())
     {
         formatStr = "%s";
-        llvm::Value* emptyPtr = builder.CreateGlobalString("", "empty_str");
+        llvm::GlobalVariable* emptyGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, "")->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, ""), "empty_str");
+        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+        llvm::Value* emptyPtr = builder.CreateInBoundsGEP(emptyGV->getValueType(), emptyGV, {zero, zero}, "empty_ptr");
         promoted = builder.CreateSelect(builder.CreateICmpNE(value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(value->getType()))), value, emptyPtr);
     }
     else formatStr = "%d";
     
-    llvm::GlobalVariable* formatGV = builder.CreateGlobalString(formatStr, "printf_format");
+    llvm::GlobalVariable* formatGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, formatStr)->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, formatStr), "printf_format");
     llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
     llvm::Value* format = builder.CreateInBoundsGEP(formatGV->getValueType(), formatGV, {zero, zero}, "printf_format_ptr");
     
@@ -723,7 +956,12 @@ void CodeGenerator::generateClassDeclStmt(const AST::ClassDeclStmt& stmt)
                 if (field->expr) initValue = generateExpr(*field->expr);
                 else
                 {
-                    if (field->type.type == TypeValue::STRING) initValue = builder.CreateGlobalString("", "empty_str");
+                    if (field->type.type == TypeValue::STRING) 
+                    {
+                        llvm::GlobalVariable* emptyStrGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, "")->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, ""), "empty_str");
+                        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+                        initValue = builder.CreateInBoundsGEP(emptyStrGV->getValueType(), emptyStrGV, {zero, zero}, "empty_str_ptr");
+                    }
                     else initValue = llvm::Constant::getNullValue(fieldTy);
                 }
 
@@ -741,6 +979,8 @@ void CodeGenerator::generateClassDeclStmt(const AST::ClassDeclStmt& stmt)
         if (auto method = dynamic_cast<AST::MethodMember*>(member.get())) generateMethodDeclStmt(*method);
         else if (auto ctor = dynamic_cast<AST::ConstructorMember*>(member.get())) generateConstructorDecl(*ctor);
     }
+
+    builder.ClearInsertionPoint();
 
     classesStack.pop();
 }
@@ -763,6 +1003,7 @@ void CodeGenerator::generateMethodDeclStmt(const AST::MethodMember& stmt)
     builder.SetInsertPoint(entry);
 
     pushScope();
+    currentFunctionReturnType = stmt.retType;
     
     llvm::Argument* thisArg = &func->arg_begin()[0];
     thisArg->setName("this");
@@ -809,6 +1050,7 @@ llvm::Value* CodeGenerator::generateExpr(const AST::Expr& expr)
     else if (auto f = dynamic_cast<const AST::FieldAccessExpr*>(&expr)) return generateFieldAccessExpr(*f);
     else if (auto m = dynamic_cast<const AST::MethodCallExpr*>(&expr)) return generateMethodCallExpr(*m);
     else if (auto t = dynamic_cast<const AST::ThisExpr*>(&expr)) return generateThisExpr(*t);
+    else if (auto s = dynamic_cast<const AST::SizeofExpr*>(&expr)) return generateSizeofExpr(*s);
 
     throw std::runtime_error("Unknown expression type in generateExpr");
 }
@@ -822,13 +1064,20 @@ llvm::Value* CodeGenerator::generateLiteral(const AST::Literal& literal)
         case TypeValue::INT: return llvm::ConstantInt::get(context, llvm::APInt(32, std::get<int>(value), true));
         case TypeValue::FLOAT: return llvm::ConstantFP::get(context, llvm::APFloat(std::get<float>(value)));
         case TypeValue::DOUBLE: return llvm::ConstantFP::get(context, llvm::APFloat(std::get<double>(value)));
-        case TypeValue::CHAR: return llvm::ConstantInt::get(context, llvm::APInt(8, std::get<char>(value), false));
+        case TypeValue::CHAR: 
+        {
+            char charValue = std::get<char>(value);
+            return llvm::ConstantInt::get(context, llvm::APInt(8, charValue, false));
+        }
         case TypeValue::BOOL: return llvm::ConstantInt::get(context, llvm::APInt(1, std::get<bool>(value), false));
         case TypeValue::STRING:
         {
             const auto& str = std::get<std::string>(value);
             
-            return builder.CreateGlobalString(str);
+            llvm::GlobalVariable* strGV = new llvm::GlobalVariable(*module, llvm::ConstantDataArray::getString(context, str)->getType(), true, llvm::GlobalValue::PrivateLinkage, llvm::ConstantDataArray::getString(context, str), "str_" + std::to_string(reinterpret_cast<uintptr_t>(&str)));
+            
+            llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            return builder.CreateInBoundsGEP(strGV->getValueType(), strGV, {zero, zero}, "str_ptr");
         }
         case TypeValue::ARRAY:
         {
@@ -843,6 +1092,39 @@ llvm::Value* CodeGenerator::generateBinaryExpr(const AST::BinaryExpr& binaryExpr
 {
     llvm::Value* left = generateExpr(*binaryExpr.left);
     llvm::Value* right = generateExpr(*binaryExpr.right);
+    
+    auto getCommonType = [&](llvm::Value* a, llvm::Value* b) -> llvm::Type*
+    {
+        llvm::Type* ta = a->getType();
+        llvm::Type* tb = b->getType();
+
+        if (ta->isPointerTy() && tb->isPointerTy()) return nullptr;
+        
+        if (ta->isPointerTy() || tb->isPointerTy()) return nullptr;
+
+        if (ta->isDoubleTy() || tb->isDoubleTy()) return llvm::Type::getDoubleTy(context);
+        if (ta->isFloatTy() || tb->isFloatTy()) return llvm::Type::getFloatTy(context);
+        
+        if (ta->isIntegerTy(8) || tb->isIntegerTy(8)) 
+        {
+            if (!classesStack.empty() && classesStack.top() == "char") return llvm::Type::getInt8Ty(context);
+            
+            return llvm::Type::getInt32Ty(context);
+        }
+        
+        if ((ta->isIntegerTy(8) && tb->isIntegerTy(32)) || (ta->isIntegerTy(32) && tb->isIntegerTy(8)))
+            if (!classesStack.empty() && classesStack.top() == "char")
+                return llvm::Type::getInt8Ty(context);
+        
+        return llvm::Type::getInt32Ty(context);
+    };
+
+    auto castBothIfNeeded = [&](llvm::Value*& a, llvm::Value*& b, llvm::Type* target)
+    {
+        if (!target) return;
+        if (a->getType() != target) a = castToExpectedIfNeeded(a, target);
+        if (b->getType() != target) b = castToExpectedIfNeeded(b, target);
+    };
     
     switch (binaryExpr.op)
     {
@@ -882,19 +1164,165 @@ llvm::Value* CodeGenerator::generateBinaryExpr(const AST::BinaryExpr& binaryExpr
                 
                 return result;
             }
-            else if (left->getType()->isIntegerTy()) return builder.CreateAdd(left, right, "addtmp");
-            else return builder.CreateFAdd(left, right, "addtmp");
+            else if (left->getType()->isPointerTy() && right->getType()->isIntegerTy(8))
+            {
+                llvm::Value* charStr = builder.CreateCall(charToStringFunc, {right}, "char_to_str");
+                
+                llvm::Function* strcatFunc = module->getFunction("strcat");
+                if (!strcatFunc)
+                {
+                    llvm::FunctionType* strcatType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcatFunc = llvm::Function::Create(strcatType, llvm::Function::ExternalLinkage, "strcat", *module);
+                }
+                
+                llvm::Function* mallocFunc = module->getFunction("malloc");
+                if (!mallocFunc) throw std::runtime_error("malloc not available");
+                
+                llvm::Value* size = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 256);
+                llvm::Value* result = builder.CreateCall(mallocFunc, size, "concat_result");
+                
+                llvm::Function* strcpyFunc = module->getFunction("strcpy");
+                if (!strcpyFunc)
+                {
+                    llvm::FunctionType* strcpyType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcpyFunc = llvm::Function::Create(strcpyType, llvm::Function::ExternalLinkage, "strcpy", *module);
+                }
+                
+                builder.CreateCall(strcpyFunc, {result, left});
+                builder.CreateCall(strcatFunc, {result, charStr});
+                
+                return result;
+            }
+            else if (left->getType()->isIntegerTy(8) && right->getType()->isPointerTy())
+            {
+                llvm::Value* charStr = builder.CreateCall(charToStringFunc, {left}, "char_to_str");
+                
+                llvm::Function* strcatFunc = module->getFunction("strcat");
+                if (!strcatFunc)
+                {
+                    llvm::FunctionType* strcatType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcatFunc = llvm::Function::Create(strcatType, llvm::Function::ExternalLinkage, "strcat", *module);
+                }
+                
+                llvm::Function* mallocFunc = module->getFunction("malloc");
+                if (!mallocFunc) throw std::runtime_error("malloc not available");
+                
+                llvm::Value* size = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 256);
+                llvm::Value* result = builder.CreateCall(mallocFunc, size, "concat_result");
+                
+                llvm::Function* strcpyFunc = module->getFunction("strcpy");
+                if (!strcpyFunc)
+                {
+                    llvm::FunctionType* strcpyType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcpyFunc = llvm::Function::Create(strcpyType, llvm::Function::ExternalLinkage, "strcpy", *module);
+                }
+                
+                builder.CreateCall(strcpyFunc, {result, charStr});
+                builder.CreateCall(strcatFunc, {result, right});
+                
+                return result;
+            }
+            else if (left->getType()->isPointerTy() && right->getType()->isIntegerTy())
+            {
+                llvm::Value* ch = right->getType()->isIntegerTy(8) ? right : builder.CreateTrunc(right, llvm::Type::getInt8Ty(context), "int_to_char");
+                llvm::Value* rightStr = builder.CreateCall(charToStringFunc, {ch}, "char_to_str");
+
+                llvm::Function* strcatFunc = module->getFunction("strcat");
+                if (!strcatFunc)
+                {
+                    llvm::FunctionType* strcatType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcatFunc = llvm::Function::Create(strcatType, llvm::Function::ExternalLinkage, "strcat", *module);
+                }
+
+                llvm::Function* mallocFunc = module->getFunction("malloc");
+                if (!mallocFunc) throw std::runtime_error("malloc not available");
+
+                llvm::Value* size = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 256);
+                llvm::Value* result = builder.CreateCall(mallocFunc, size, "concat_result");
+
+                llvm::Function* strcpyFunc = module->getFunction("strcpy");
+                if (!strcpyFunc)
+                {
+                    llvm::FunctionType* strcpyType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcpyFunc = llvm::Function::Create(strcpyType, llvm::Function::ExternalLinkage, "strcpy", *module);
+                }
+
+                builder.CreateCall(strcpyFunc, {result, left});
+                builder.CreateCall(strcatFunc, {result, rightStr});
+
+                return result;
+            }
+            else if (left->getType()->isIntegerTy() && right->getType()->isPointerTy())
+            {
+                llvm::Value* ch = left->getType()->isIntegerTy(8) ? left : builder.CreateTrunc(left, llvm::Type::getInt8Ty(context), "int_to_char");
+                llvm::Value* leftStr = builder.CreateCall(charToStringFunc, {ch}, "char_to_str");
+
+                llvm::Function* strcatFunc = module->getFunction("strcat");
+                if (!strcatFunc)
+                {
+                    llvm::FunctionType* strcatType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcatFunc = llvm::Function::Create(strcatType, llvm::Function::ExternalLinkage, "strcat", *module);
+                }
+
+                llvm::Function* mallocFunc = module->getFunction("malloc");
+                if (!mallocFunc) throw std::runtime_error("malloc not available");
+
+                llvm::Value* size = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 256);
+                llvm::Value* result = builder.CreateCall(mallocFunc, size, "concat_result");
+
+                llvm::Function* strcpyFunc = module->getFunction("strcpy");
+                if (!strcpyFunc)
+                {
+                    llvm::FunctionType* strcpyType = llvm::FunctionType::get(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), {llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0), llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0)}, false);
+                    strcpyFunc = llvm::Function::Create(strcpyType, llvm::Function::ExternalLinkage, "strcpy", *module);
+                }
+
+                builder.CreateCall(strcpyFunc, {result, leftStr});
+                builder.CreateCall(strcatFunc, {result, right});
+                
+                return result;
+            }
+            else
+            {
+                llvm::Type* common = getCommonType(left, right);
+                castBothIfNeeded(left, right, common);
+                if (common && common->isIntegerTy()) return builder.CreateAdd(left, right, "addtmp");
+                if (common && common->isFloatingPointTy()) return builder.CreateFAdd(left, right, "addtmp");
+                
+                throw std::runtime_error("Unsupported '+' operand types");
+            }
         case TokenType::MINUS: 
-            if (left->getType()->isIntegerTy()) return builder.CreateSub(left, right, "subtmp");
-            else return builder.CreateFSub(left, right, "subtmp");
+        {
+            llvm::Type* common = getCommonType(left, right);
+            castBothIfNeeded(left, right, common);
+            if (common && common->isIntegerTy()) return builder.CreateSub(left, right, "subtmp");
+
+            return builder.CreateFSub(left, right, "subtmp");
+        }
         case TokenType::MULTIPLY:
-            if (left->getType()->isIntegerTy()) return builder.CreateMul(left, right, "multmp");
-            else return builder.CreateFMul(left, right, "multmp");
+        {
+            llvm::Type* common = getCommonType(left, right);
+            castBothIfNeeded(left, right, common);
+            if (common && common->isIntegerTy()) return builder.CreateMul(left, right, "multmp");
+
+            return builder.CreateFMul(left, right, "multmp");
+        }
         case TokenType::DIVIDE:
-            if (left->getType()->isIntegerTy()) return builder.CreateSDiv(left, right, "divtmp");
-            else return builder.CreateFDiv(left, right, "divtmp");
+        {
+            llvm::Type* common = getCommonType(left, right);
+            castBothIfNeeded(left, right, common);
+            if (common && common->isIntegerTy()) return builder.CreateSDiv(left, right, "divtmp");
+
+            return builder.CreateFDiv(left, right, "divtmp");
+        }
         case TokenType::MODULO:
-            return builder.CreateSRem(left, right, "modtmp");
+        {
+            llvm::Type* common = getCommonType(left, right);
+            castBothIfNeeded(left, right, common);
+            if (common && common->isIntegerTy()) return builder.CreateSRem(left, right, "modtmp");
+            
+            return builder.CreateFRem(left, right, "modtmp");
+        }
         case TokenType::EQUALS:
             if (left->getType()->isIntegerTy() && right->getType()->isIntegerTy()) return builder.CreateICmpEQ(left, right, "eqtmp");
             else if (left->getType()->isFloatingPointTy() && right->getType()->isFloatingPointTy()) return builder.CreateFCmpOEQ(left, right, "eqtmp");
@@ -954,7 +1382,7 @@ llvm::Value* CodeGenerator::generateUnaryExpr(const AST::UnaryExpr& unaryExpr)
 llvm::Value* CodeGenerator::generateVarExpr(const AST::VarExpr& varExpr)
 {
     llvm::Value* address = getNamedValue(varExpr.name);
-    if (address == nullptr) 
+    if (address == nullptr)
     {
         if (!classesStack.empty())
         {
@@ -1041,21 +1469,39 @@ llvm::Value* CodeGenerator::generateFuncCallExpr(const AST::FuncCallExpr& funcEx
     }
 
     const auto& overloads = it->second;
+    
+    int bestScore = -1;
+    const FunctionInfo* bestOverload = nullptr;
+    std::vector<llvm::Value*> bestCasted;
+    
     for (const auto& fn : overloads)
     {
         if (fn.args.size() != argValues.size()) continue;
 
         std::vector<llvm::Value*> casted;
         casted.reserve(argValues.size());
-        
         bool ok = true;
+        int score = 0;
+        
         for (size_t i = 0; i < argValues.size(); i++)
         {
             llvm::Type* expected = getLLVMType(fn.args[i].type);
             llvm::Value* value = argValues[i];
 
-            if (value->getType() == expected) { casted.push_back(value); continue; }
+            if (value->getType() == expected) 
+            { 
+                casted.push_back(value); 
+                continue;
+            }
             if (expected->isPointerTy() && value->getType()->isPointerTy()) { ok = false; break; }
+
+            if (value->getType()->isIntegerTy() && expected->isIntegerTy()) score += 1; // int->int conversion
+            else if (value->getType()->isFloatTy() && expected->isFloatTy()) score += 1; // float->float conversion
+            else if (value->getType()->isDoubleTy() && expected->isDoubleTy()) score += 1; // double->double conversion
+            else if (value->getType()->isIntegerTy() && (expected->isFloatTy() || expected->isDoubleTy())) score += 2; // int->float conversion
+            else if (value->getType()->isFloatTy() && expected->isDoubleTy()) score += 1; // float->double conversion
+            else if (value->getType()->isDoubleTy() && expected->isFloatTy()) score += 2; // double->float conversion
+            else { ok = false; break; }
 
             value = castToExpectedIfNeeded(value, expected);
             
@@ -1065,11 +1511,21 @@ llvm::Value* CodeGenerator::generateFuncCallExpr(const AST::FuncCallExpr& funcEx
         }
         
         if (!ok) continue;
-
-        llvm::Function* callee = module->getFunction(fn.mangledName);
-        if (!callee) throw std::runtime_error("Function not declared: " + fn.mangledName);
-
-        return builder.CreateCall(callee, casted);
+        
+        if (bestScore == -1 || score < bestScore)
+        {
+            bestScore = score;
+            bestOverload = &fn;
+            bestCasted = std::move(casted);
+        }
+    }
+    
+    if (bestOverload)
+    {
+        llvm::Function* callee = module->getFunction(bestOverload->mangledName);
+        if (!callee) throw std::runtime_error("Function not declared: " + bestOverload->mangledName);
+        
+        return builder.CreateCall(callee, bestCasted);
     }
 
     throw std::runtime_error("No matching overload found for function: " + funcExpr.name);
@@ -1412,13 +1868,13 @@ void CodeGenerator::generateTraitImplStmt(const AST::TraitImplStmt& stmt)
 {
     TraitImplInfo implInfo;
     implInfo.traitName = stmt.traitName;
-    implInfo.className = stmt.className;
+    implInfo.className = stmt.targetType.name;
     
     bool isBuiltinType = false;
     TypeValue builtinTypeValue;
     for (auto& typeValue : {TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::CHAR, TypeValue::BOOL, TypeValue::STRING})
     {
-        if (stmt.className == typeToString(Type(typeValue, "")))
+        if (stmt.targetType.type == typeValue)
         {
             isBuiltinType = true;
             builtinTypeValue = typeValue;
@@ -1432,7 +1888,7 @@ void CodeGenerator::generateTraitImplStmt(const AST::TraitImplStmt& stmt)
         {
             std::vector<llvm::Type*> paramTypes;
             
-            if (isBuiltinType) paramTypes.push_back(getLLVMType(Type(builtinTypeValue, stmt.className)));
+            if (isBuiltinType) paramTypes.push_back(getLLVMType(stmt.targetType));
             else paramTypes.push_back(llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0));
             
             for (const auto& arg : method->args) paramTypes.push_back(getLLVMType(arg.type));
@@ -1440,17 +1896,24 @@ void CodeGenerator::generateTraitImplStmt(const AST::TraitImplStmt& stmt)
             llvm::Type* retType = getLLVMType(method->retType);
             llvm::FunctionType* funcType = llvm::FunctionType::get(retType, paramTypes, false);
             
-            std::string mangledName = stmt.className + "_" + mangleFunction(method->name, method->args);
+            std::string mangledName = stmt.targetType.name + "_" + mangleFunction(method->name, method->args);
             llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, mangledName, *module);
             
             llvm::BasicBlock* entryBlock = llvm::BasicBlock::Create(context, "entry", func);
             builder.SetInsertPoint(entryBlock);
             
-            classesStack.push(stmt.className);
+            classesStack.push(stmt.targetType.name);
             
-            setNamedValue("this", func->getArg(0));
+            if (isBuiltinType)
+            {
+                llvm::AllocaInst* thisAlloca = builder.CreateAlloca(func->getArg(0)->getType(), nullptr, "this.addr");
+                builder.CreateStore(func->getArg(0), thisAlloca);
+                setNamedValue("this", thisAlloca);
+            }
+            else setNamedValue("this", func->getArg(0));
             
             pushScope();
+            currentFunctionReturnType = method->retType;
             
             auto argIt = func->arg_begin();
             std::advance(argIt, 1);
@@ -1479,7 +1942,7 @@ void CodeGenerator::generateTraitImplStmt(const AST::TraitImplStmt& stmt)
     
     if (!isBuiltinType)
     {
-        auto classIt = classes.find(stmt.className);
+        auto classIt = classes.find(stmt.targetType.name);
         if (classIt != classes.end())
         {
             for (const auto& impl : stmt.implementations)
@@ -1506,12 +1969,90 @@ void CodeGenerator::generateTraitImplStmt(const AST::TraitImplStmt& stmt)
         }
     }
     
-    traitImplementations[stmt.className].push_back(std::move(implInfo));
+    traitImplementations[stmt.targetType.name].push_back(std::move(implInfo));
+    
+    builder.ClearInsertionPoint();
 }
 
 llvm::Value* CodeGenerator::generateThisExpr(const AST::ThisExpr&)
 {
-    return getNamedValue("this");
+    llvm::Value* thisValue = getNamedValue("this");
+    if (!thisValue) return nullptr;
+    
+    if (auto* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(thisValue))
+    {
+        llvm::Type* allocatedType = allocaInst->getAllocatedType();
+        return builder.CreateLoad(allocatedType, allocaInst, "this");
+    }
+
+    return thisValue;
+}
+
+llvm::Value* CodeGenerator::generateSizeofExpr(const AST::SizeofExpr& expr)
+{
+    llvm::Type* targetType = nullptr;
+    
+    if (expr.isTypeExpression)
+    {
+        if (expr.type.type == TypeValue::CLASS)
+        {
+            auto it = classes.find(expr.type.name);
+            if (it == classes.end()) throw std::runtime_error("Class not found: " + expr.type.name);
+            if (!it->second.type) throw std::runtime_error("Class type is null for: " + expr.type.name);
+            
+            targetType = it->second.type;
+        }
+        else if (expr.type.type == TypeValue::TRAIT) targetType = llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0);
+        else targetType = getLLVMType(expr.type);
+    }
+    else if (expr.expr)
+    {
+        if (auto varExpr = dynamic_cast<const AST::VarExpr*>(expr.expr.get()))
+        {
+            Type varType = getVariableType(varExpr->name);
+            if (varType.type == TypeValue::ARRAY)
+            {
+                auto it = arrayTypes.find(varExpr->name);
+                if (it != arrayTypes.end()) targetType = it->second;
+                else
+                {
+                    targetType = getLLVMType(varType);
+                    if (auto ptrType = llvm::dyn_cast<llvm::PointerType>(targetType))
+                        if (auto arrayType = llvm::dyn_cast<llvm::ArrayType>(ptrType->getArrayElementType()))
+                            targetType = arrayType;
+                }
+            }
+            else
+            {
+                llvm::Value* exprValue = generateExpr(*expr.expr);
+                if (!exprValue) throw std::runtime_error("Cannot generate code for expression in sizeof");
+                
+                targetType = exprValue->getType();
+            }
+        }
+        else if (expr.type.type == TypeValue::ARRAY)
+        {
+            targetType = getLLVMType(expr.type);
+            if (auto ptrType = llvm::dyn_cast<llvm::PointerType>(targetType))
+                if (auto arrayType = llvm::dyn_cast<llvm::ArrayType>(ptrType->getArrayElementType()))
+                    targetType = arrayType;
+        }
+        else
+        {
+            llvm::Value* exprValue = generateExpr(*expr.expr);
+            if (!exprValue) throw std::runtime_error("Cannot generate code for expression in sizeof");
+            
+            targetType = exprValue->getType();
+        }
+    }
+    else targetType = getLLVMType(expr.type);
+    
+    if (!targetType) throw std::runtime_error("Cannot determine type for sizeof");
+    
+    const llvm::DataLayout& dataLayout = module->getDataLayout();
+    uint64_t size = dataLayout.getTypeAllocSize(targetType);
+    
+    return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), size);
 }
 
 void CodeGenerator::generateArrayAsgnStmt(const AST::ArrayAsgnStmt& stmt)
@@ -1526,26 +2067,10 @@ void CodeGenerator::generateArrayAsgnStmt(const AST::ArrayAsgnStmt& stmt)
     llvm::PointerType* ptrType = llvm::cast<llvm::PointerType>(arrayPtr->getType());
     if (!ptrType) throw std::runtime_error("Variable '" + stmt.name + "' is not a pointer type");
     
-    llvm::AllocaInst* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr);
-    if (!allocaInst) throw std::runtime_error("Variable '" + stmt.name + "' is not an allocated array");
-    
-    llvm::Type* allocatedType = allocaInst->getAllocatedType();
-    
-    llvm::Type* allocaType = allocaInst->getType();
-    
     llvm::ArrayType* arrayType = nullptr;
-    
-    if (allocatedType->isPointerTy()) arrayType = llvm::dyn_cast<llvm::ArrayType>(allocatedType);
-    
-    if (!arrayType) {
-        auto it = arrayTypes.find(stmt.name);
-        if (it != arrayTypes.end()) arrayType = it->second;
-        else
-        {
-            llvm::Type* elementType = arrayType->getElementType();
-            arrayType = llvm::ArrayType::get(elementType, arrayType->getNumElements());
-        }
-    }
+    auto it = arrayTypes.find(stmt.name);
+    if (it != arrayTypes.end()) arrayType = it->second;
+    else throw std::runtime_error("Array type not found for variable: " + stmt.name);
     
     std::vector<llvm::Value*> indices =
     {
@@ -1553,8 +2078,11 @@ void CodeGenerator::generateArrayAsgnStmt(const AST::ArrayAsgnStmt& stmt)
         index
     };
     
-    llvm::Value* arrayPtrDeref = builder.CreateLoad(arrayPtr->getType(), arrayPtr, stmt.name + ".deref");
-    llvm::Value* elementPtr = builder.CreateGEP(arrayType, arrayPtrDeref, indices, stmt.name + ".element");
+    llvm::Value* targetArray;
+    if (auto* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr)) targetArray = builder.CreateLoad(arrayPtr->getType(), arrayPtr, stmt.name + ".deref");
+    else targetArray = builder.CreateLoad(arrayPtr->getType(), arrayPtr, stmt.name + ".load");
+    
+    llvm::Value* elementPtr = builder.CreateGEP(arrayType, targetArray, indices, stmt.name + ".element");
     
     builder.CreateStore(value, elementPtr);
 }
@@ -1566,25 +2094,48 @@ llvm::Value* CodeGenerator::generateArrayLiteral(const AST::ArrayLiteral& arrayL
     size_t arraySize = arrayLit.elements.size();
     
     llvm::ArrayType* arrayType = llvm::ArrayType::get(elementType, arraySize);
-    llvm::AllocaInst* arrayAlloca = builder.CreateAlloca(arrayType, nullptr, "array_literal");
     
-    for (size_t i = 0; i < arraySize; ++i)
+    if (builder.GetInsertBlock() == nullptr)
     {
-        llvm::Value* element = generateExpr(*arrayLit.elements[i]);
+        std::vector<llvm::Constant*> elements;
+        elements.reserve(arraySize);
         
-        std::vector<llvm::Value*> indices =
+        for (size_t i = 0; i < arraySize; ++i)
         {
-            llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0),
-            llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i)
-        };
-        llvm::Value* elementPtr = builder.CreateGEP(arrayType, arrayAlloca, indices, "element_ptr");
+            llvm::Value* element = generateExpr(*arrayLit.elements[i]);
+            llvm::Constant* constElement = llvm::dyn_cast<llvm::Constant>(element);
+            if (!constElement) throw std::runtime_error("Global array literal element " + std::to_string(i) + " is not a constant expression");
+            
+            elements.push_back(constElement);
+        }
         
-        builder.CreateStore(element, elementPtr);
+        llvm::Constant* constantArray = llvm::ConstantArray::get(arrayType, elements);
+        arrayTypes["array_literal"] = arrayType;
+        
+        return constantArray;
     }
-    
-    arrayTypes["array_literal"] = arrayType;
-    
-    return arrayAlloca;
+    else
+    {
+        llvm::AllocaInst* arrayAlloca = builder.CreateAlloca(arrayType, nullptr, "array_literal");
+        
+        for (size_t i = 0; i < arraySize; ++i)
+        {
+            llvm::Value* element = generateExpr(*arrayLit.elements[i]);
+            
+            std::vector<llvm::Value*> indices =
+            {
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0),
+                llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), i)
+            };
+            llvm::Value* elementPtr = builder.CreateGEP(arrayType, arrayAlloca, indices, "element_ptr");
+            
+            builder.CreateStore(element, elementPtr);
+        }
+        
+        arrayTypes["array_literal"] = arrayType;
+        
+        return arrayAlloca;
+    }
 }
 
 llvm::Value* CodeGenerator::generateArrayExpr(const AST::ArrayExpr& expr)
@@ -1597,27 +2148,20 @@ llvm::Value* CodeGenerator::generateArrayExpr(const AST::ArrayExpr& expr)
     llvm::PointerType* ptrType = llvm::cast<llvm::PointerType>(arrayPtr->getType());
     if (!ptrType) throw std::runtime_error("Variable '" + expr.name + "' is not a pointer type");
     
-    llvm::AllocaInst* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr);
-    if (!allocaInst) throw std::runtime_error("Variable '" + expr.name + "' is not an allocated array");
+    Type varType = getNamedType(expr.name);
     
-    llvm::Type* allocatedType = allocaInst->getAllocatedType();
-    
-    llvm::Type* allocaType = allocaInst->getType();
+    if (varType.type == TypeValue::STRING)
+    {
+        llvm::Value* strPtr = builder.CreateLoad(arrayPtr->getType(), arrayPtr, expr.name + ".load");
+        llvm::Value* charPtr = builder.CreateGEP(llvm::Type::getInt8Ty(context), strPtr, index, expr.name + ".char");
+        
+        return builder.CreateLoad(llvm::Type::getInt8Ty(context), charPtr, expr.name + ".char_value");
+    }
     
     llvm::ArrayType* arrayType = nullptr;
-    
-    if (allocatedType->isPointerTy()) arrayType = llvm::dyn_cast<llvm::ArrayType>(allocatedType);
-    
-    if (!arrayType)
-    {
-        auto it = arrayTypes.find(expr.name);
-        if (it != arrayTypes.end()) arrayType = it->second;
-        else
-        {
-            llvm::Type* elementType = arrayType->getElementType();
-            arrayType = llvm::ArrayType::get(elementType, arrayType->getNumElements());
-        }
-    }
+    auto it = arrayTypes.find(expr.name);
+    if (it != arrayTypes.end()) arrayType = it->second;
+    else throw std::runtime_error("Array type not found for variable: " + expr.name);
     
     std::vector<llvm::Value*> indices =
     {
@@ -1625,8 +2169,11 @@ llvm::Value* CodeGenerator::generateArrayExpr(const AST::ArrayExpr& expr)
         index
     };
     
-    llvm::Value* arrayPtrDeref = builder.CreateLoad(arrayPtr->getType(), arrayPtr, expr.name + ".deref");
-    llvm::Value* elementPtr = builder.CreateGEP(arrayType, arrayPtrDeref, indices, expr.name + ".element");
+    llvm::Value* targetArray;
+    if (auto* allocaInst = llvm::dyn_cast<llvm::AllocaInst>(arrayPtr)) targetArray = builder.CreateLoad(arrayPtr->getType(), arrayPtr, expr.name + ".deref");
+    else targetArray = builder.CreateLoad(arrayPtr->getType(), arrayPtr, expr.name + ".load");
+    
+    llvm::Value* elementPtr = builder.CreateGEP(arrayType, targetArray, indices, expr.name + ".element");
     
     return builder.CreateLoad(arrayType->getElementType(), elementPtr, expr.name + ".value");
 }
@@ -1635,3 +2182,5 @@ void CodeGenerator::printIR() const
 {
     module->print(llvm::errs(), nullptr);
 }
+
+

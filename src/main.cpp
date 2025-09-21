@@ -2,6 +2,8 @@
 #include "../include/parser/parser.hpp"
 #include "../include/codegen/codegenerator.hpp"
 #include "../include/semantic/semanticanalyzer.hpp"
+#include "../include/lexer/includemanager.hpp"
+#include <filesystem>
 #include <iostream>
 #include <fstream>
 
@@ -14,6 +16,31 @@
 
 std::map<std::string, Value> variables;
 
+std::string findLibsPath(const std::string& sourcePath)
+{
+    std::filesystem::path buildPath = std::filesystem::current_path() / "build" / "libs";
+    if (std::filesystem::exists(buildPath) && std::filesystem::is_directory(buildPath)) return buildPath.string();
+    
+    try
+    {
+        std::filesystem::path executablePath = std::filesystem::canonical("/proc/self/exe");
+        std::filesystem::path installPath = executablePath.parent_path().parent_path() / "share" / "stagelang" / "libs";
+        if (std::filesystem::exists(installPath) && std::filesystem::is_directory(installPath)) return installPath.string();
+    }
+    catch (const std::filesystem::filesystem_error&) {}
+    
+    std::filesystem::path currentPath = std::filesystem::path(sourcePath).parent_path();
+    while (!currentPath.empty() && currentPath != currentPath.root_path())
+    {
+        std::filesystem::path libsPath = currentPath / "libs";
+        if (std::filesystem::exists(libsPath) && std::filesystem::is_directory(libsPath)) return libsPath.string();
+
+        currentPath = currentPath.parent_path();
+    }
+    
+    return "";
+}
+
 int main(int argc, char** argv)
 {
     if (argc != 3)
@@ -21,6 +48,8 @@ int main(int argc, char** argv)
         std::cerr << "Usage: stc <source_file>.st <executable_name>" << std::endl;
         return 1;
     }
+    
+    clearIncludeCache();
     const std::string sourcePath = argv[1];
     std::string executablePath = argv[2];
     
@@ -50,7 +79,8 @@ int main(int argc, char** argv)
     Lexer lexer = Lexer(fileContent);
     std::vector<Token> tokens = lexer.tokenize();
 
-    Parser parser = Parser(tokens);
+    std::string libsPath = findLibsPath(std::filesystem::absolute(sourcePath).string());
+    Parser parser = Parser(tokens, sourcePath, libsPath);
     std::vector<AST::StmtPtr> stmts = parser.parse();
 
     SemanticAnalyzer analyzer;

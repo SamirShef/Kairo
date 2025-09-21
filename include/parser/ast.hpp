@@ -34,13 +34,14 @@ namespace AST
     public:
         Type type;
         std::string name;
+        bool isConst;
 
         Argument() = default;
-        Argument(Type t, std::string n) : type(t), name(n) {}
+        Argument(Type t, std::string n, bool isConst = false) : type(t), name(n), isConst(isConst) {}
 
         bool operator==(const Argument& other) const
         {
-            return type.type == other.type.type && type.name == other.type.name && name == other.name;
+            return type.type == other.type.type && type.name == other.type.name && name == other.name && isConst == other.isConst;
         }
         
         bool operator!=(const Argument& other) const
@@ -74,13 +75,14 @@ namespace AST
     public:
         Type type;
         ExprPtr expr;
+        bool isConst;
 
-        FieldMember(AccessModifier am, std::string n, Type t, ExprPtr e) : Member(am, n), type(t), expr(std::move(e)) {}
+        FieldMember(AccessModifier am, std::string n, Type t, ExprPtr e, bool isConst = false) : Member(am, n), type(t), expr(std::move(e)), isConst(isConst) {}
         
         ~FieldMember() override = default;
         FieldMember* clone() const override
         {
-            return new FieldMember(access, name, type, expr ? std::unique_ptr<Expr>(expr->clone()) : nullptr);
+            return new FieldMember(access, name, type, expr ? std::unique_ptr<Expr>(expr->clone()) : nullptr, isConst);
         }
     };
 
@@ -136,13 +138,14 @@ namespace AST
         std::string name;
         Type type;
         ExprPtr expr;
+        bool isConst;
 
-        VarDeclStmt(std::string n, Type t, ExprPtr e) : name(n), type(t), expr(std::move(e)) {}
+        VarDeclStmt(std::string n, Type t, ExprPtr e, bool isConst = false) : name(n), type(t), expr(std::move(e)), isConst(isConst) {}
 
         ~VarDeclStmt() override = default;
         VarDeclStmt* clone() const override
         {
-            return new VarDeclStmt(name, type, expr ? std::unique_ptr<Expr>(expr->clone()) : nullptr);
+            return new VarDeclStmt(name, type, expr ? std::unique_ptr<Expr>(expr->clone()) : nullptr, isConst);
         }
     };
 
@@ -153,13 +156,14 @@ namespace AST
         Type elementType;
         ExprPtr size;
         ExprPtr initializer;
+        bool isConst;
 
-        ArrayDeclStmt(std::string n, Type et, ExprPtr s, ExprPtr init = nullptr) : name(n), elementType(et), size(std::move(s)), initializer(std::move(init)) {}
+        ArrayDeclStmt(std::string n, Type et, ExprPtr s, ExprPtr init = nullptr, bool isConst = false) : name(n), elementType(et), size(std::move(s)), initializer(std::move(init)), isConst(isConst) {}
 
         ~ArrayDeclStmt() override = default;
         ArrayDeclStmt* clone() const override
         {
-            return new ArrayDeclStmt(name, elementType, std::unique_ptr<Expr>(size->clone()), initializer ? std::unique_ptr<Expr>(initializer->clone()) : nullptr);
+            return new ArrayDeclStmt(name, elementType, std::unique_ptr<Expr>(size->clone()), initializer ? std::unique_ptr<Expr>(initializer->clone()) : nullptr, isConst);
         }
     };
 
@@ -201,13 +205,14 @@ namespace AST
         ExprPtr object;
         std::string name;
         ExprPtr expr;
+        bool isConst;
 
-        FieldAsgnStmt(ExprPtr t, ExprPtr o, std::string n, ExprPtr e) : target(std::move(t)), object(std::move(o)), name(n), expr(std::move(e)) {}
+        FieldAsgnStmt(ExprPtr t, ExprPtr o, std::string n, ExprPtr e, bool isConst = false) : target(std::move(t)), object(std::move(o)), name(n), expr(std::move(e)), isConst(isConst) {}
 
         ~FieldAsgnStmt() override = default;
         FieldAsgnStmt* clone() const override
         {
-            return new FieldAsgnStmt(std::unique_ptr<Expr>(target->clone()), std::unique_ptr<Expr>(object->clone()), name, expr ? std::unique_ptr<Expr>(expr->clone()) : nullptr);
+            return new FieldAsgnStmt(std::unique_ptr<Expr>(target->clone()), std::unique_ptr<Expr>(object->clone()), name, expr ? std::unique_ptr<Expr>(expr->clone()) : nullptr, isConst);
         }
     };
 
@@ -218,8 +223,9 @@ namespace AST
         Type retType;
         Arguments args;
         Block block;
+        bool isConst;
 
-        FuncDeclStmt(std::string n, Type rt, Arguments a, Block b) : name(n), retType(rt), args(std::move(a)), block(std::move(b)) {}
+        FuncDeclStmt(std::string n, Type rt, Arguments a, Block b, bool isConst = false) : name(n), retType(rt), args(std::move(a)), block(std::move(b)), isConst(isConst) {}
 
         ~FuncDeclStmt() override = default;
         FuncDeclStmt* clone() const override
@@ -228,7 +234,7 @@ namespace AST
             for (const auto& stmt : block)
                 blockCopy.push_back(std::unique_ptr<Stmt>(stmt->clone()));
                 
-            return new FuncDeclStmt(name, retType, args, std::move(blockCopy));
+            return new FuncDeclStmt(name, retType, args, std::move(blockCopy), isConst);
         }
     };
 
@@ -417,7 +423,7 @@ public:
             for (const auto& member : members)
             {
                 if (auto field = dynamic_cast<const FieldMember*>(member.get()))
-                    membersCopy.push_back(std::make_unique<FieldMember>(field->access, field->name, field->type, field->expr ? std::unique_ptr<Expr>(field->expr->clone()) : nullptr));
+                    membersCopy.push_back(std::make_unique<FieldMember>(field->access, field->name, field->type, field->expr ? std::unique_ptr<Expr>(field->expr->clone()) : nullptr, field->isConst));
                 else if (auto method = dynamic_cast<const MethodMember*>(member.get()))
                 {
                     Block blockCopy;
@@ -478,10 +484,10 @@ public:
     {
     public:
         std::string traitName;
-        std::string className;
+        Type targetType;
         std::vector<std::unique_ptr<Member>> implementations;
 
-        TraitImplStmt(std::string tn, std::string cn, std::vector<std::unique_ptr<Member>> impl) : traitName(tn), className(cn), implementations(std::move(impl)) {}
+        TraitImplStmt(std::string tn, Type tt, std::vector<std::unique_ptr<Member>> impl) : traitName(tn), targetType(tt), implementations(std::move(impl)) {}
 
         ~TraitImplStmt() override = default;
         TraitImplStmt* clone() const override
@@ -499,7 +505,21 @@ public:
                 }
             }
             
-            return new TraitImplStmt(traitName, className, std::move(implCopy));
+            return new TraitImplStmt(traitName, targetType, std::move(implCopy));
+        }
+    };
+
+    class IncludeStmt : public Stmt
+    {
+    public:
+        std::string filePath;
+
+        IncludeStmt(std::string fp) : filePath(fp) {}
+        
+        ~IncludeStmt() override = default;
+        IncludeStmt* clone() const override
+        {
+            return new IncludeStmt(filePath);
         }
     };
 
@@ -591,7 +611,7 @@ public:
     public:
         std::vector<ExprPtr> elements;
         Type elementType;
-        ExprPtr size; // Размер массива (может быть nullptr)
+        ExprPtr size;
 
         ArrayLiteral(std::vector<ExprPtr> elems, Type et, ExprPtr s = nullptr) : Literal(Value(std::vector<Value>()), Type::createArrayType(std::make_shared<Type>(et))), elements(std::move(elems)), elementType(et), size(std::move(s)) {}
 
@@ -753,6 +773,24 @@ public:
         ThisExpr* clone() const override
         {
             return new ThisExpr(expr ? std::unique_ptr<Expr>(expr->clone()) : nullptr);
+        }
+    };
+
+    class SizeofExpr : public Expr
+    {
+    public:
+        ExprPtr expr;
+        Type type;
+        bool isTypeExpression;
+        
+        SizeofExpr(ExprPtr e) : expr(std::move(e)), isTypeExpression(false) {}
+        SizeofExpr(Type t) : expr(nullptr), type(t), isTypeExpression(true) {}
+        
+        ~SizeofExpr() override = default;
+        SizeofExpr* clone() const override
+        {
+            if (expr) return new SizeofExpr(std::unique_ptr<Expr>(expr->clone()));
+            else return new SizeofExpr(type);
         }
     };
 }

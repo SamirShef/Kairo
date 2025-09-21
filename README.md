@@ -46,19 +46,25 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build -j"$(nproc)"
 ```
 
+> [!NOTE]
+> The build process automatically copies the `libs` directory to the build folder. This means that after building, you can delete the source repository and the compiler will still work with the standard libraries, as they are now embedded in the build directory.
+
 ### 5) Install
-- User-local (recommended): installs `stc` into `~/.local/bin`
+- User-local (recommended): installs `stc` into `~/.local/bin` and libraries into `~/.local/share/stagelang/libs`
   ```bash
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
   cmake --build build -j"$(nproc)"
   cmake --install build
   ```
-- System-wide (optional): installs into `/usr/local/bin`
+- System-wide (optional): installs into `/usr/local/bin` and libraries into `/usr/local/share/stagelang/libs`
   ```bash
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
   cmake --build build -j"$(nproc)"
   sudo cmake --install build
   ```
+
+> [!NOTE]
+> The installation process installs both the compiler binary and the standard libraries. After installation, you can delete the source repository and the build directory, as the compiler will use the installed libraries.
 
 ### 6) Add to PATH (zsh)
 If `~/.local/bin` is not in your PATH:
@@ -159,19 +165,25 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
+> [!NOTE]
+> The build process automatically copies the `libs` directory to the build folder. This means that after building, you can delete the source repository and the compiler will still work with the standard libraries, as they are now embedded in the build directory.
+
 ### 5) Install
-- **User-local** (recommended): installs `stc.exe` into `%USERPROFILE%\AppData\Local\Programs\StageLang`:
+- **User-local** (recommended): installs `stc.exe` into `%USERPROFILE%\AppData\Local\Programs\StageLang` and libraries into `%USERPROFILE%\AppData\Local\Programs\StageLang\share\stagelang\libs`:
   ```cmd
   cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%USERPROFILE%\AppData\Local\Programs\StageLang"
   cmake --build build --config Release
   cmake --install build
   ```
-- **System-wide** (optional): installs into `C:\Program Files\StageLang`:
+- **System-wide** (optional): installs into `C:\Program Files\StageLang` and libraries into `C:\Program Files\StageLang\share\stagelang\libs`:
   ```cmd
   cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="C:\Program Files\StageLang"
   cmake --build build --config Release
   cmake --install build
   ```
+
+> [!NOTE]
+> The installation process installs both the compiler binary and the standard libraries. After installation, you can delete the source repository and the build directory, as the compiler will use the installed libraries.
 
 **Alternative: CI-compatible installation**
 If you used the CI approach (Option C in step 3), the LLVM will be installed locally and you can build StageLang directly:
@@ -257,7 +269,7 @@ List of _primitive_ types:
 The language supports the following operators. All binary operators are left-associative. Operator precedence (from highest to lowest) follows the order listed below within each group (top binds tighter):
 
 - Arithmetic:
-  - Unary: `-x`
+  - Unary: `-x`, `x++`, `x--`
   - Multiplicative: `x * y`, `x / y`, `x % y`
   - Additive: `x + y`, `x - y`
 
@@ -304,6 +316,7 @@ List of statements:
 * [Global variables definition](#global-variables-definition)
 * [Function definition](#function-definition)
 * [Local variables definition](#local-variables-definition)
+* [Constants](#constants)
 * [Comments](#comments)
 * [If/Else statements](#ifelse-statements)
 * [While loop](#while-loop)
@@ -313,6 +326,8 @@ List of statements:
 * [Classes](#classes)
 * [Arrays](#arrays)
 * [Traits](#traits)
+* [Include files](#include-files)
+* [Sizeof](#sizeof-operator)
 
 > [!NOTE]
 > In the end all statements you must be add `;` character.
@@ -377,6 +392,17 @@ func int main()
     var int b;  // has value of 0
 
     return 0;
+}
+```
+
+## Constants
+For constant definition you need use keyword `const`, type, name and initializer. For example:
+```C++
+const char const1 = 'A';
+
+func int main()
+{
+    const int const2 = 10;
 }
 ```
 
@@ -807,5 +833,33 @@ int main()
 ```
 
 You can specify trait as a generalizing type of objects (as variable or function's argument).
+
+## Include files
+For include files you need use keyword `include` and string literal (path to file with extension). First, a search takes place in the libs folder with the standard language libraries, then a search takes place near the current file. When files are included, their contents are included in the current file. For example:
+```C++
+include "math.st";      // std lib
+include "convert.st";   // std lib
+
+func int main()
+{
+    echo sin(90)->toString() + "\n";
+}
+```
+
+## Sizeof operator
+For use sizeof you need use keyword `sizeof` and expression or type between round brackets. For example:
+```C++
+func int main()
+{
+    var int num = 19;
+    echo sizeof(int);
+    echo '\n';
+    echo sizeof(num);
+    echo '\n';
+}
+```
+
+> ![WARNING]
+> If you specify `string` in `sizeof`, you will get the value 8, since string is a `char*` and sizeof will return the size of the pointer. To get the length of a string, use the `length()` function from the inclusion `string.st` (`str->length()`).
 
 More examples you can see in `examples` directory.

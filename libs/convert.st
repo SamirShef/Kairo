@@ -1,0 +1,231 @@
+include "string.st";
+include "math.st";
+
+trait ToString
+{
+    pub func string toString();
+}
+
+impl ToString for int
+{
+    pub func string toString()
+    {
+        if (this == 0) return "0";
+
+        var int num = abs(this);
+        var bool isNegative = this < 0;
+        var string str;
+
+        while (num > 0)
+        {
+            str += '0' + num % 10;
+            num /= 10;
+        }
+
+        var string res;
+        var int length = str->length();
+        for (int i = length; i >= 0; i--) res += str[i];
+
+        if (isNegative) res = "-" + res;
+
+        return res;
+    }
+}
+
+impl ToString for float
+{
+    pub func string toString()
+    {
+        if (this == 0) return "0";
+
+        var int intPart = abs(this);
+        var bool isNegative = this < 0;
+        var string str = intPart->toString();
+
+        var float absValue = abs(this);
+        var int intValue = absValue;
+        var float fracValue = absValue - intValue;
+        
+        if (fracValue > 0.000001f || fracValue < -0.000001f)
+        {
+            str += ".";
+            var int precision = 0;
+            var int maxPrecision = 6;
+            var string fracStr = "";
+            
+            while (fracValue != 0 && precision < maxPrecision)
+            {
+                fracValue *= 10;
+                var int digit = fracValue;
+                fracStr += digit->toString();
+                fracValue = fracValue - digit;
+                precision++;
+            }
+            
+            var int fracLength = fracStr->length();
+            var int lastNonZero = fracLength - 1;
+            while (lastNonZero >= 0 && fracStr[lastNonZero] == '0') lastNonZero--;
+            
+            for (int i = 0; i <= lastNonZero; i++) str += fracStr[i];
+        }
+        
+        if (isNegative) str = "-" + str;
+        
+        return str;
+    }
+}
+
+impl ToString for double
+{
+    pub func string toString()
+    {
+        if (this == 0) return "0";
+
+        var int intPart = abs(this);
+        var bool isNegative = this < 0;
+        var string str = intPart->toString();
+
+        var double absValue = abs(this);
+        var int intValue = absValue;
+        var double fracValue = absValue - intValue;
+        echo fracValue;
+        echo '\n';
+        if (fracValue > 0.000000000000001d || fracValue < -0.000000000000001d)
+        {
+            echo "AWDAWD\n";
+            str += ".";
+            var int precision = 0;
+            var int maxPrecision = 15;
+            var string fracStr = "";
+            
+            while (fracValue != 0 && precision < maxPrecision)
+            {
+                fracValue *= 10;
+                var int digit = fracValue;
+                fracStr += digit->toString();
+                fracValue = fracValue - digit;
+                precision++;
+            }
+            
+            var int fracLength = fracStr->length();
+            var int lastNonZero = fracLength - 1;
+            while (lastNonZero >= 0 && fracStr[lastNonZero] == '0') lastNonZero--;
+            
+            for (int i = 0; i <= lastNonZero; i++) str += fracStr[i];
+        }
+        
+        if (isNegative) str = "-" + str;
+        
+        return str;
+    }
+}
+
+impl ToString for bool
+{
+    pub func string toString()
+    {
+        if (this) return "true";
+        else return "false";
+    }
+}
+
+trait ParseInt
+{
+    pub func int parseInt();
+}
+
+impl ParseInt for string
+{
+    pub func int parseInt()
+    {
+        var string str = this;
+        var int length = str->length();
+        var int res;
+
+        for (int i; i < length; i++)
+        {
+            res *= 10;
+            res += str[i] - '0';
+        }
+
+        return res;
+    }
+}
+
+trait ParseFloat
+{
+    pub func float parseFloat();
+}
+
+impl ParseFloat for string
+{
+    pub func float parseFloat()
+    {
+        var string str = this;
+        var int length = str->length();
+        var int fractionalDigitsCount;
+        var bool afterDot;
+        var float res;
+
+        for (int i; i < length; i++)
+        {
+            if (str[i] == '.')
+            {
+                afterDot = true;
+                continue;
+            }
+
+            if (afterDot)
+            {
+                fractionalDigitsCount++;
+                res += pow(10d, -fractionalDigitsCount) * (str[i] - '0');
+            }
+            else
+            {
+                res *= 10;
+                res += str[i] - '0';
+            }
+        }
+
+        return res;
+    }
+}
+
+trait ParseDouble
+{
+    pub func double parseDouble();
+}
+
+impl ParseDouble for string
+{
+    pub func double parseDouble()
+    {
+        var string str = this;
+        var int length = str->length();
+        var int fractionalDigitsCount;
+        var bool afterDot;
+        var double res;
+
+        for (int i; i < length; i++)
+        {
+            if (str[i] == '.')
+            {
+                afterDot = true;
+                continue;
+            }
+
+            if (afterDot)
+            {
+                fractionalDigitsCount++;
+                res += pow(10d, -fractionalDigitsCount) * (str[i] - '0');
+            }
+            else
+            {
+                res *= 10;
+                res += str[i] - '0';
+            }
+        }
+
+        return res;
+    }
+}

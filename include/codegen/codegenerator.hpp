@@ -53,8 +53,11 @@ private:
     std::map<std::string, std::vector<TraitImplInfo>> traitImplementations;
     
     std::map<std::string, llvm::ArrayType*> arrayTypes;
+    std::map<std::string, Type> globalVariableTypes;
     
     std::map<std::string, std::string> arrayVariableNames;
+    llvm::Function* charToStringFunc;
+    Type currentFunctionReturnType;
 
     llvm::Type* getLLVMType(Type);
     llvm::Value* castToExpectedIfNeeded(llvm::Value* value, llvm::Type* expectedType);
@@ -67,6 +70,8 @@ private:
     void popScope();
     void setNamedValue(const std::string& name, llvm::Value* value);
     llvm::Value* getNamedValue(const std::string& name) const;
+    Type getNamedType(const std::string& name) const;
+    Type getVariableType(const std::string& name) const;
     
     void generateStmt(const AST::Stmt&);
     void generateVarDeclStmt(const AST::VarDeclStmt&);
@@ -103,6 +108,7 @@ private:
     llvm::Value* generateFieldAccessExpr(const AST::FieldAccessExpr&);
     llvm::Value* generateMethodCallExpr(const AST::MethodCallExpr&);
     llvm::Value* generateThisExpr(const AST::ThisExpr&);
+    llvm::Value* generateSizeofExpr(const AST::SizeofExpr&);
 
 public:
     CodeGenerator(const std::string&);

@@ -10,8 +10,6 @@ file(GLOB_RECURSE SOURCES "src/*.cpp")
 
 add_executable(stc ${SOURCES})
 
-# Use LLVM's CMake integration for cross-platform linking
-# Prefer the monolithic target if available, otherwise map components.
 target_include_directories(stc PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(stc PRIVATE ${LLVM_DEFINITIONS})
 
@@ -22,6 +20,8 @@ else()
     target_link_libraries(stc PRIVATE ${LLVM_LIBS})
 endif()
 
-# Install the compiler binary
+file(COPY libs DESTINATION ${CMAKE_BINARY_DIR})
+
 include(GNUInstallDirs)
 install(TARGETS stc RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(DIRECTORY libs DESTINATION ${CMAKE_INSTALL_DATADIR}/stagelang)

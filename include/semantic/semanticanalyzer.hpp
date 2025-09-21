@@ -9,7 +9,7 @@ public:
     void analyze(const std::vector<AST::StmtPtr>&);
 
 private:
-    std::stack<std::map<std::string, Type>> variables;
+    std::stack<std::map<std::string, std::pair<Type, bool>>> variables;
     std::stack<Type> variablesTypes;
     
     int loopDepth = 0;
@@ -105,7 +105,7 @@ private:
     {
         { TypeValue::INT, { TypeValue::FLOAT, TypeValue::DOUBLE } },
         { TypeValue::FLOAT, { TypeValue::DOUBLE } },
-        { TypeValue::CHAR, { TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE } }
+        { TypeValue::CHAR, { TypeValue::INT, TypeValue::FLOAT, TypeValue::DOUBLE, TypeValue::STRING } }
     };
 
     void analyzeStmt(AST::Stmt&);
@@ -144,6 +144,7 @@ private:
     Type analyzeFieldAccessExpr(const AST::FieldAccessExpr&);
     Type analyzeMethodCallExpr(const AST::MethodCallExpr&);
     Type analyzeThisExpr(const AST::ThisExpr&);
+    Type analyzeSizeofExpr(const AST::SizeofExpr&);
 
     bool canImplicitlyCast(Type, Type);
 

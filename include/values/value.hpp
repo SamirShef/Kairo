@@ -16,7 +16,7 @@ struct Type
     std::shared_ptr<Type> elementType;
     size_t arraySize;
 
-    Type() = default;
+    Type() : type(TypeValue::INT), name(""), elementType(nullptr), arraySize(0) {}
     Type(TypeValue t, std::string n) : type(t), name(n), elementType(nullptr), arraySize(0) {}
     Type(TypeValue t, std::string n, std::shared_ptr<Type> et, size_t size = 0) : type(t), name(n), elementType(et), arraySize(size) {}
 

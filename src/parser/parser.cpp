@@ -1,11 +1,18 @@
 #include "../../include/parser/parser.hpp"
+#include "../../include/lexer/includemanager.hpp"
+#include <memory>
 #include <stdexcept>
+#include <vector>
 
 std::vector<AST::StmtPtr> Parser::parse()
 {
     std::vector<AST::StmtPtr> stmts;
 
-    while (peek().type != TokenType::END_OF_FILE) stmts.push_back(parseStmt());
+    while (peek().type != TokenType::END_OF_FILE)
+    {
+        if (match(TokenType::INCLUDE)) parseIncludeStmt(&stmts);
+        else stmts.push_back(parseStmt());
+    }
 
     return stmts;
 }
@@ -13,6 +20,7 @@ std::vector<AST::StmtPtr> Parser::parse()
 AST::StmtPtr Parser::parseStmt()
 {
     if (match(TokenType::VAR)) return parseVarDeclStmt();
+    else if (match(TokenType::CONST)) return parseConstDeclStmt();
     else if (match(TokenType::FUNC)) return parseFuncDeclStmt();
     else if (match(TokenType::IDENTIFIER))
     {
@@ -35,6 +43,15 @@ AST::StmtPtr Parser::parseStmt()
     else if (match(TokenType::TRAIT)) return parseTraitDeclStmt();
     else if (match(TokenType::IMPL)) return parseTraitImplStmt();
     else throw std::runtime_error("Unexpected token: '" + peek().value + "'" + " -> " + std::to_string(peek().line) + ":" + std::to_string(peek().column));
+}
+
+void Parser::parseIncludeStmt(std::vector<AST::StmtPtr>* stmts)
+{
+    Token path = consume(TokenType::STRING_LIT, "Expected path");
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    std::vector<AST::StmtPtr> fileStmts = parseIncludeFile(path.value, currentFilePath, libsPath);
+    for (auto& stmt : fileStmts) stmts->push_back(std::move(stmt));
 }
 
 AST::StmtPtr Parser::parseVarDeclStmt()
@@ -66,12 +83,43 @@ AST::StmtPtr Parser::parseVarDeclStmt()
 
     return std::make_unique<AST::VarDeclStmt>(id.value, baseType, std::move(expr));
 }
+
+AST::StmtPtr Parser::parseConstDeclStmt()
+{
+    Type baseType = consumeType();
+    
+    if (peek().type == TokenType::LBRACKET)
+    {
+        auto [arrayType, size] = parseArrayType();
+        Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+        
+        consume(TokenType::ASSIGN, "Expected '='");
+        
+        AST::ExprPtr initializer = nullptr;
+        if (peek().type == TokenType::LBRACKET) initializer = parseArrayLiteral();
+        else initializer = parseExpr();
+        
+        consume(TokenType::SEMICOLON, "Expected ';'");
+        
+        return std::make_unique<AST::ArrayDeclStmt>(id.value, baseType, std::move(size), std::move(initializer), true);
+    }
+    
+    Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+
+    consume(TokenType::ASSIGN, "Expected '='");
+    
+    AST::ExprPtr expr = parseExpr();
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    return std::make_unique<AST::VarDeclStmt>(id.value, baseType, std::move(expr), true);
+}
  
 std::pair<Type, AST::ExprPtr> Parser::parseArrayType()
 {
     consume(TokenType::LBRACKET, "Expected '['");
     
-    AST::ExprPtr size = parseExpr();
+    AST::ExprPtr size = nullptr;
+    if (peek().type != TokenType::RBRACKET) size = parseExpr();
     
     consume(TokenType::RBRACKET, "Expected ']'");
     
@@ -87,15 +135,7 @@ AST::StmtPtr Parser::parseFuncDeclStmt()
 
     consume(TokenType::LPAREN, "Expected '('");
 
-    AST::Arguments args;
-    while (!match(TokenType::RPAREN))
-    {
-        Type aType = consumeType();
-        Token aName = consume(TokenType::IDENTIFIER, "Expected identificator");
-        args.push_back(AST::Argument(aType, aName.value));
-
-        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
-    }
+    AST::Arguments args = parseArguments();
     
     consume(TokenType::LBRACE, "Expected '{'");
     AST::Block block;
@@ -361,6 +401,7 @@ AST::StmtPtr Parser::parseClassDeclStmt()
         else if (match(TokenType::PRIVATE)) {}
 
         if (match(TokenType::VAR)) members.push_back(std::move(parseFieldDecl(access)));
+        else if (match(TokenType::CONST)) members.push_back(std::move(parseConstFieldDecl(access)));
         else if (match(TokenType::FUNC)) members.push_back(std::move(parseMethodDecl(access)));
         else if (match(TokenType::CONSTRUCTOR)) members.push_back(std::move(parseConstructorDecl(access)));
         else throw std::runtime_error("Unsupported class member declaration: '" + peek().value + "'");
@@ -382,6 +423,20 @@ std::unique_ptr<AST::Member> Parser::parseFieldDecl(AST::AccessModifier& access)
     return std::make_unique<AST::FieldMember>(access, id.value, type, std::move(expr));
 }
 
+std::unique_ptr<AST::Member> Parser::parseConstFieldDecl(AST::AccessModifier& access)
+{
+    Type type = consumeType();
+    Token id = consume(TokenType::IDENTIFIER, "Expected identificator");
+
+    consume(TokenType::ASSIGN, "Expected '='");
+    
+    AST::ExprPtr expr = parseExpr();
+
+    consume(TokenType::SEMICOLON, "Expected ';'");
+
+    return std::make_unique<AST::FieldMember>(access, id.value, type, std::move(expr), true);
+}
+
 std::unique_ptr<AST::Member> Parser::parseMethodDecl(AST::AccessModifier& access)
 {
     Type retType = Type(TypeValue::VOID, "void");
@@ -391,15 +446,7 @@ std::unique_ptr<AST::Member> Parser::parseMethodDecl(AST::AccessModifier& access
 
     consume(TokenType::LPAREN, "Expected '('");
 
-    AST::Arguments args;
-    while (!match(TokenType::RPAREN))
-    {
-        Type aType = consumeType();
-        Token aName = consume(TokenType::IDENTIFIER, "Expected identificator");
-        args.push_back(AST::Argument(aType, aName.value));
-
-        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
-    }
+    AST::Arguments args = parseArguments();
     
     consume(TokenType::LBRACE, "Expected '{'");
     AST::Block block;
@@ -411,15 +458,7 @@ std::unique_ptr<AST::Member> Parser::parseMethodDecl(AST::AccessModifier& access
 std::unique_ptr<AST::Member> Parser::parseConstructorDecl(AST::AccessModifier& access)
 {
     consume(TokenType::LPAREN, "Expected '('");
-    AST::Arguments args;
-    while (!match(TokenType::RPAREN))
-    {
-        Type aType = consumeType();
-        Token aName = consume(TokenType::IDENTIFIER, "Expected identificator");
-        args.push_back(AST::Argument(aType, aName.value));
-
-        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
-    }
+    AST::Arguments args = parseArguments();
 
     consume(TokenType::LBRACE, "Expected '{'");
     AST::Block block;
@@ -470,7 +509,7 @@ AST::StmtPtr Parser::parseTraitImplStmt()
         else throw std::runtime_error("Unsupported trait implementation member: '" + peek().value + "'");
     }
 
-    return std::make_unique<AST::TraitImplStmt>(traitName.value, targetType.name, std::move(implementations));
+    return std::make_unique<AST::TraitImplStmt>(traitName.value, targetType, std::move(implementations));
 }
 
 std::unique_ptr<AST::Member> Parser::parseTraitMethodDecl(AST::AccessModifier& access)
@@ -482,15 +521,7 @@ std::unique_ptr<AST::Member> Parser::parseTraitMethodDecl(AST::AccessModifier& a
 
     consume(TokenType::LPAREN, "Expected '('");
 
-    AST::Arguments args;
-    while (!match(TokenType::RPAREN))
-    {
-        Type aType = consumeType();
-        Token aName = consume(TokenType::IDENTIFIER, "Expected identificator");
-        args.push_back(AST::Argument(aType, aName.value));
-
-        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
-    }
+    AST::Arguments args = parseArguments();
     
     consume(TokenType::SEMICOLON, "Expected ';'");
 
@@ -517,7 +548,7 @@ Type Parser::consumeType()
     
     if (match(TokenType::LBRACKET))
     {
-        consume(TokenType::RBRACKET, "Expected ']' after '['");
+        consume(TokenType::RBRACKET, "Expected ']'");
 
         return Type::createArrayType(std::make_shared<Type>(baseType));
     }
@@ -536,7 +567,9 @@ AST::ExprPtr Parser::createCompoundAssignmentOperator(Token& id)
         case TokenType::MULTIPLY_ASSIGN: return std::make_unique<AST::BinaryExpr>(TokenType::MULTIPLY, std::make_unique<AST::VarExpr>(id.value), std::move(parseExpr()));
         case TokenType::DIVIDE_ASSIGN: return std::make_unique<AST::BinaryExpr>(TokenType::DIVIDE, std::make_unique<AST::VarExpr>(id.value), std::move(parseExpr()));
         case TokenType::MODULO_ASSIGN: return std::make_unique<AST::BinaryExpr>(TokenType::MODULO, std::make_unique<AST::VarExpr>(id.value), std::move(parseExpr()));
-        default: throw  std::runtime_error("Token '" + op.value + "' does not a compound assignment operator");
+        case TokenType::INCREMENT: return std::make_unique<AST::BinaryExpr>(TokenType::PLUS, std::make_unique<AST::VarExpr>(id.value), std::make_unique<AST::IntLiteral>(1));
+        case TokenType::DECREMENT: return std::make_unique<AST::BinaryExpr>(TokenType::MINUS, std::make_unique<AST::VarExpr>(id.value), std::make_unique<AST::IntLiteral>(1));
+        default: throw  std::runtime_error("Token '" + peek(-2).value + " " + peek(-1).value + " " + op.value + " " + peek(1).value + " " + peek(2).value + " " + "' does not a compound assignment operator");
     }
 }
 
@@ -628,6 +661,9 @@ AST::ExprPtr Parser::parseUnary()
     {
         if (match(TokenType::NOT)) return std::make_unique<AST::UnaryExpr>(TokenType::NOT, std::move(parsePrimary()));
         else if (match(TokenType::MINUS)) return std::make_unique<AST::UnaryExpr>(TokenType::MINUS, std::move(parsePrimary()));
+        else if (match(TokenType::INCREMENT)) return std::make_unique<AST::UnaryExpr>(TokenType::INCREMENT, std::move(parsePrimary()));
+        else if (match(TokenType::DECREMENT)) return std::make_unique<AST::UnaryExpr>(TokenType::DECREMENT, std::move(parsePrimary()));
+        else if (match(TokenType::SIZEOF)) return parseSizeofExpr();
         else break;
     }
 
@@ -650,6 +686,8 @@ AST::ExprPtr Parser::parsePrimary()
     {
         AST::ExprPtr expr = parseExpr();
         consume(TokenType::RPAREN, "Expected ')'");
+        
+        if (peek().type == TokenType::NEXT) return parseCallsChain(std::move(expr));
         
         return expr;
     }
@@ -770,6 +808,33 @@ AST::ExprPtr Parser::parseNewExpr()
     return std::make_unique<AST::NewExpr>(id.value, std::move(args));
 }
 
+AST::ExprPtr Parser::parseSizeofExpr()
+{
+    consume(TokenType::LPAREN, "Expected '('");
+    
+    if (peek().type == TokenType::INT || peek().type == TokenType::FLOAT || peek().type == TokenType::DOUBLE || peek().type == TokenType::CHAR || peek().type == TokenType::BOOL || peek().type == TokenType::STRING || peek().type == TokenType::VOID)
+    {
+        Type type = consumeType();
+        consume(TokenType::RPAREN, "Expected ')'");
+        
+        return std::make_unique<AST::SizeofExpr>(type);
+    }
+    else if (peek().type == TokenType::IDENTIFIER)
+    {
+        AST::ExprPtr expr = parseExpr();
+        consume(TokenType::RPAREN, "Expected ')'");
+        
+        return std::make_unique<AST::SizeofExpr>(std::move(expr));
+    }
+    else
+    {
+        AST::ExprPtr expr = parseExpr();
+        consume(TokenType::RPAREN, "Expected ')'");
+        
+        return std::make_unique<AST::SizeofExpr>(std::move(expr));
+    }
+}
+
 AST::ExprPtr Parser::parseArrayLiteral()
 {
     std::vector<AST::ExprPtr> elements;
@@ -835,6 +900,22 @@ AST::ExprPtr Parser::parseMethodCallExpr(AST::ExprPtr obj, std::string& name)
 AST::ExprPtr Parser::parseThisExpr()
 {
     return std::make_unique<AST::ThisExpr>(nullptr);
+}
+
+AST::Arguments Parser::parseArguments()
+{
+    AST::Arguments args;
+    while (!match(TokenType::RPAREN))
+    {
+        bool isConst = match(TokenType::CONST);
+        Type aType = consumeType();
+        Token aName = consume(TokenType::IDENTIFIER, "Expected identificator");
+        args.push_back(AST::Argument(aType, aName.value, isConst));
+
+        if (peek().type != TokenType::RPAREN) consume(TokenType::COMMA, "Expected ','");
+    }
+
+    return args;
 }
 
 Token Parser::peek()
