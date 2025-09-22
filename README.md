@@ -1,5 +1,5 @@
-# StageLang
-**Stage** - multi-paradigm programming language
+# Kairo
+**Kairo** - multi-paradigm programming language
 
 Compiler version: **v0.7** – C++ &amp; LLVM
 
@@ -23,8 +23,8 @@ Compiler version: **v0.7** – C++ &amp; LLVM
 
 ### 2) Clone the repository
 ```bash
-git clone https://github.com/SamirShef/StageLang.git
-cd StageLang
+git clone https://github.com/SamirShef/Kairo.git
+cd Kairo
 ```
 
 ### 3) Configure the build
@@ -50,13 +50,13 @@ cmake --build build -j"$(nproc)"
 > The build process automatically copies the `libs` directory to the build folder. This means that after building, you can delete the source repository and the compiler will still work with the standard libraries, as they are now embedded in the build directory.
 
 ### 5) Install
-- User-local (recommended): installs `stc` into `~/.local/bin` and libraries into `~/.local/share/stagelang/libs`
+- User-local (recommended): installs `krc` into `~/.local/bin` and libraries into `~/.local/share/kairo/libs`
   ```bash
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local"
   cmake --build build -j"$(nproc)"
   cmake --install build
   ```
-- System-wide (optional): installs into `/usr/local/bin` and libraries into `/usr/local/share/stagelang/libs`
+- System-wide (optional): installs into `/usr/local/bin` and libraries into `/usr/local/share/kairo/libs`
   ```bash
   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
   cmake --build build -j"$(nproc)"
@@ -75,8 +75,8 @@ source ~/.zshrc
 
 ### 7) Verify
 ```bash
-command -v stc
-stc examples/helloworld.st ./hello && ./hello
+command -v krc
+krc examples/hello_world.kr ./hello && ./hello
 ```
 
 ### 8) Uninstall
@@ -91,7 +91,7 @@ sudo xargs -a build/install_manifest.txt -r rm -vf
 
 ### Troubleshooting
 - LLVM not found: pass the correct `-DLLVM_DIR=...` to CMake (see step 3). On Arch it is usually `/usr/lib/cmake/llvm`; on Ubuntu it can be `/usr/lib/llvm-20/lib/cmake/llvm`.
-- Linker issues: ensure `clang` is installed and in PATH. You can override the linker used by the compiler with `STC_LINKER=clang`.
+- Linker issues: ensure `clang` is installed and in PATH. You can override the linker used by the compiler with `KRC_LINKER=clang`.
 - PATH not updated: after editing `~/.zshrc`, run `source ~/.zshrc` or restart the shell.
 
 ## Installation (Windows)
@@ -124,8 +124,8 @@ sudo xargs -a build/install_manifest.txt -r rm -vf
 
 ### 2) Clone the repository
 ```cmd
-git clone https://github.com/SamirShef/StageLang.git
-cd StageLang
+git clone https://github.com/SamirShef/Kairo.git
+cd Kairo
 ```
 
 ### 3) Configure the build
@@ -169,15 +169,15 @@ cmake --build build --config Release
 > The build process automatically copies the `libs` directory to the build folder. This means that after building, you can delete the source repository and the compiler will still work with the standard libraries, as they are now embedded in the build directory.
 
 ### 5) Install
-- **User-local** (recommended): installs `stc.exe` into `%USERPROFILE%\AppData\Local\Programs\StageLang` and libraries into `%USERPROFILE%\AppData\Local\Programs\StageLang\share\stagelang\libs`:
+- **User-local** (recommended): installs `krc.exe` into `%USERPROFILE%\AppData\Local\Programs\Kairo` and libraries into `%USERPROFILE%\AppData\Local\Programs\Kairo\share\kairo\libs`:
   ```cmd
-  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%USERPROFILE%\AppData\Local\Programs\StageLang"
+  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="%USERPROFILE%\AppData\Local\Programs\Kairo"
   cmake --build build --config Release
   cmake --install build
   ```
-- **System-wide** (optional): installs into `C:\Program Files\StageLang` and libraries into `C:\Program Files\StageLang\share\stagelang\libs`:
+- **System-wide** (optional): installs into `C:\Program Files\Kairo` and libraries into `C:\Program Files\Kairo\share\kairo\libs`:
   ```cmd
-  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="C:\Program Files\StageLang"
+  cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="C:\Program Files\Kairo"
   cmake --build build --config Release
   cmake --install build
   ```
@@ -186,41 +186,41 @@ cmake --build build --config Release
 > The installation process installs both the compiler binary and the standard libraries. After installation, you can delete the source repository and the build directory, as the compiler will use the installed libraries.
 
 **Alternative: CI-compatible installation**
-If you used the CI approach (Option C in step 3), the LLVM will be installed locally and you can build StageLang directly:
+If you used the CI approach (Option C in step 3), the LLVM will be installed locally and you can build Kairo directly:
 ```cmd
-# After running CI scripts, build StageLang
+# After running CI scripts, build Kairo
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DLLVM_DIR="%WORKING_DIR%\llvm\build\lib\cmake\llvm"
 cmake --build build --config Release
-cmake --install build --prefix="%USERPROFILE%\AppData\Local\Programs\StageLang"
+cmake --install build --prefix="%USERPROFILE%\AppData\Local\Programs\Kairo"
 ```
 
 ### 6) Add to PATH
-After installation, add the StageLang directory to your system PATH:
+After installation, add the Kairo directory to your system PATH:
 
 **Option A: User PATH (recommended)**
 1. Press `Win + R`, type `sysdm.cpl`, press Enter
 2. Go to **Advanced** tab → **Environment Variables**
 3. Under **User variables**, find **Path** → **Edit**
-4. Click **New** and add: `%USERPROFILE%\AppData\Local\Programs\StageLang`
+4. Click **New** and add: `%USERPROFILE%\AppData\Local\Programs\Kairo`
 5. Click **OK** on all dialogs
 
 **Option B: System PATH**
 1. Press `Win + R`, type `sysdm.cpl`, press Enter
 2. Go to **Advanced** tab → **Environment Variables**
 3. Under **System variables**, find **Path** → **Edit**
-4. Click **New** and add: `C:\Program Files\StageLang`
+4. Click **New** and add: `C:\Program Files\Kairo`
 5. Click **OK** on all dialogs
 
 **Option C: Command line (temporary)**
 ```cmd
-set PATH=%PATH%;%USERPROFILE%\AppData\Local\Programs\StageLang
+set PATH=%PATH%;%USERPROFILE%\AppData\Local\Programs\Kairo
 ```
 
 ### 7) Verify installation
 Open a **new** Command Prompt or PowerShell and verify:
 ```cmd
-stc --version
-stc examples\hello_world.st hello.exe
+krc --version
+krc examples\hello_world.kr hello.exe
 hello.exe
 ```
 
@@ -837,8 +837,8 @@ You can specify trait as a generalizing type of objects (as variable or function
 ## Include files
 For include files you need use keyword `include` and string literal (path to file with extension). First, a search takes place in the libs folder with the standard language libraries, then a search takes place near the current file. When files are included, their contents are included in the current file. For example:
 ```C++
-include "math.st";      // std lib
-include "convert.st";   // std lib
+include "math.kr";      // std lib
+include "convert.kr";   // std lib
 
 func int main()
 {
@@ -860,6 +860,6 @@ func int main()
 ```
 
 > ![WARNING]
-> If you specify `string` in `sizeof`, you will get the value 8, since string is a `char*` and sizeof will return the size of the pointer. To get the length of a string, use the `length()` function from the inclusion `string.st` (`str->length()`).
+> If you specify `string` in `sizeof`, you will get the value 8, since string is a `char*` and sizeof will return the size of the pointer. To get the length of a string, use the `length()` function from the inclusion `string.kr` (`str->length()`).
 
 More examples you can see in `examples` directory.

@@ -24,7 +24,7 @@ std::string findLibsPath(const std::string& sourcePath)
     try
     {
         std::filesystem::path executablePath = std::filesystem::canonical("/proc/self/exe");
-        std::filesystem::path installPath = executablePath.parent_path().parent_path() / "share" / "stagelang" / "libs";
+        std::filesystem::path installPath = executablePath.parent_path().parent_path() / "share" / "kairo" / "libs";
         if (std::filesystem::exists(installPath) && std::filesystem::is_directory(installPath)) return installPath.string();
     }
     catch (const std::filesystem::filesystem_error&) {}
@@ -45,7 +45,7 @@ int main(int argc, char** argv)
 {
     if (argc != 3)
     {
-        std::cerr << "Usage: stc <source_file>.st <executable_name>" << std::endl;
+        std::cerr << "Usage: krc <source_file>.kr <executable_name>" << std::endl;
         return 1;
     }
     
@@ -86,7 +86,7 @@ int main(int argc, char** argv)
     SemanticAnalyzer analyzer;
     analyzer.analyze(stmts);
 
-    CodeGenerator codegen("stage_lang_compiler");
+    CodeGenerator codegen("kairo_compiler");
     codegen.generate(stmts);
     
     //std::cout << "\n======LLVM IR======\n" << std::endl;
@@ -107,7 +107,7 @@ int main(int argc, char** argv)
     }
     auto getTriple = []() -> std::string
     {
-        const char* envTriple = std::getenv("STC_TRIPLE");
+        const char* envTriple = std::getenv("KRC_TRIPLE");
         if (envTriple && *envTriple) return std::string(envTriple);
 
         std::array<char, 256> buffer{};
@@ -190,7 +190,7 @@ int main(int argc, char** argv)
     dest.flush();
     dest.close();
 
-    const char* envLinker = std::getenv("STC_LINKER");
+    const char* envLinker = std::getenv("KRC_LINKER");
     std::string linker = envLinker ? std::string(envLinker) : std::string("clang");
     #if defined(_WIN32)
     std::string linkCmd = linker + std::string(" ") + std::string("\"") + objectPath + std::string("\"") + " -o " + std::string("\"") + executablePath + std::string("\"") + " -fuse-ld=lld";
