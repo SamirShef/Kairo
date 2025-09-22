@@ -1,7 +1,7 @@
 # Kairo
 **Kairo** - multi-paradigm programming language
 
-Compiler version: **v0.7** – C++ &amp; LLVM
+Compiler version: **v0.7.1** – C++ &amp; LLVM
 
 ## Installation (Linux)
 
