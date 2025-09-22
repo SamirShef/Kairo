@@ -1,5 +1,5 @@
-include "string.st";
-include "math.st";
+include "string.kr";
+include "math.kr";
 
 trait ToString
 {
