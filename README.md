@@ -859,7 +859,7 @@ func int main()
 }
 ```
 
-> ![WARNING]
+> [!WARNING]
 > If you specify `string` in `sizeof`, you will get the value 8, since string is a `char*` and sizeof will return the size of the pointer. To get the length of a string, use the `length()` function from the inclusion `string.kr` (`str->length()`).
 
 More examples you can see in `examples` directory.
